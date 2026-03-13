@@ -70,9 +70,15 @@ client.on("messageCreate", async (message) => {
 
         const messages = splitMessage(reply);
 
-        for (const msg of messages) {
-            await message.reply(msg);
-        }
+        for (let i = 0; i < messages.length; i++) {
+
+            if (i === 0) {
+                await message.reply(messages[i]);
+            } else {
+                await message.channel.send(messages[i]);
+            }
+
+}
 
     } catch (err) {
         console.error(err);
