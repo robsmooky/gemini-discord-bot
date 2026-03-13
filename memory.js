@@ -2,6 +2,8 @@ const Database = require("better-sqlite3");
 
 const db = new Database("memory.db");
 
+const MAX_HISTORY = 20;
+
 db.prepare(`
 CREATE TABLE IF NOT EXISTS memory (
     userId TEXT PRIMARY KEY,
@@ -11,11 +13,23 @@ CREATE TABLE IF NOT EXISTS memory (
 
 function getMemory(userId) {
     const row = db.prepare("SELECT history FROM memory WHERE userId = ?").get(userId);
+
     if (!row) return [];
-    return JSON.parse(row.history);
+
+    try {
+        return JSON.parse(row.history);
+    } catch {
+        return [];
+    }
 }
 
 function saveMemory(userId, history) {
+
+    // limitar memoria
+    if (history.length > MAX_HISTORY) {
+        history = history.slice(-MAX_HISTORY);
+    }
+
     db.prepare(`
         INSERT INTO memory (userId, history)
         VALUES (?, ?)
