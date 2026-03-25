@@ -1,9 +1,6 @@
 require("dotenv").config();
 
-const { 
-    Client, 
-    GatewayIntentBits 
-} = require("discord.js");
+const { Client, GatewayIntentBits } = require("discord.js");
 
 const { askGemini } = require("./ai");
 const { getMemory, saveMemory } = require("./memory");
@@ -20,30 +17,79 @@ const client = new Client({
 const processedMessages = new Set();
 const cooldown = new Map();
 
-// ===== DETECCIÓN DE IMAGEN =====
-function isImageRequest(text) {
+// ===== DETECCIÓN =====
+function startsWithGemini(text) {
+    return /^gemini[\s:,.!?-]/i.test(text);
+}
 
-    const creationIntent = /(haz|crea|genera|dibuja|pinta|imagina|make|create|draw|generate)/i;
-    const imageWords = /(imagen|dibujo|ilustración|render|picture|image)/i;
+// decidir cuándo usar contexto
+function shouldUseContext(content, message) {
 
-    const strongPatterns = [
-        /hazme.*(imagen|dibujo)/i,
-        /crea.*(imagen|dibujo)/i,
-        /genera.*(imagen|dibujo)/i,
-        /dibuja/i,
-        /imagen de/i,
-        /draw/i,
-        /imagine/i
-    ];
+    if (content.length < 80) return true;
 
-    if (strongPatterns.some(p => p.test(text))) return true;
-    if (creationIntent.test(text) && imageWords.test(text)) return true;
+    if (message.reference) return true;
+
+    if (/(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón)/i.test(content)) return true;
 
     return false;
 }
 
-function startsWithGemini(text) {
-    return /^gemini[\s:,.!?-]/i.test(text);
+// ===== FILTRAR MENSAJES =====
+function filterMessages(messages) {
+
+    return messages
+        .filter(m =>
+            !m.author.bot &&
+            m.content &&
+            m.content.length > 3 &&
+            !m.content.startsWith("http")
+        )
+        .slice(-8); // máximo 8 mensajes relevantes
+}
+
+// ===== RESUMIR CONTEXTO =====
+async function summarizeContext(messages) {
+
+    let raw = "";
+
+    for (const msg of messages) {
+        raw += `${msg.author.username}: ${msg.content}\n`;
+    }
+
+    const prompt = `
+Resume this conversation briefly.
+
+- Who is saying what
+- Main disagreement or topic
+- Keep it under 5 lines
+
+Conversation:
+${raw}
+`;
+
+    const summary = await askGemini([], prompt);
+
+    return summary;
+}
+
+// ===== CONSTRUIR CONTEXTO INTELIGENTE =====
+async function buildSmartContext(message) {
+
+    const fetched = await message.channel.messages.fetch({ limit: 15 });
+
+    const ordered = [...fetched.values()].reverse();
+
+    const filtered = filterMessages(ordered);
+
+    if (filtered.length < 2) return null;
+
+    try {
+        const summary = await summarizeContext(filtered);
+
+        return `Contexto de la conversación:\n${summary}`;
+    } catch {
+        return null;
+    }
 }
 
 // ===== READY =====
@@ -74,7 +120,7 @@ client.on("messageCreate", async (message) => {
         content = content.replace(/<@!?[0-9]+>/, "").trim();
     }
 
-    // "Gemini ..."
+    // Gemini al inicio
     if (startsWithGemini(content)) {
         trigger = true;
         content = content.replace(/^gemini[\s:,.!?-]*/i, "").trim();
@@ -96,22 +142,26 @@ client.on("messageCreate", async (message) => {
 
     try {
 
-        // ===== SI PIDEN IMAGEN =====
-        if (isImageRequest(content)) {
-            return message.reply(
-                "Ahora mismo no puedo generar imágenes 😅\n" +
-                "Pero puedo ayudarte a describirla o crear un prompt si quieres."
-            );
-        }
-
-        // ===== TEXTO =====
         await message.channel.sendTyping();
 
         const userId = message.author.id;
         let history = getMemory(userId);
 
-        const reply = await askGemini(history, content);
+        let finalInput = content;
 
+        // ===== CONTEXTO ULTRA PRO =====
+        if (shouldUseContext(content, message)) {
+
+            const context = await buildSmartContext(message);
+
+            if (context) {
+                finalInput = `${context}\n\nUsuario pregunta:\n${content}`;
+            }
+        }
+
+        const reply = await askGemini(history, finalInput);
+
+        // guardar SOLO input original
         history.push(
             { role: "user", parts: [{ text: content }] },
             { role: "model", parts: [{ text: reply }] }
