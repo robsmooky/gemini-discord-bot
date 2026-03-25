@@ -60,7 +60,7 @@ Output ONLY the prompt.
   const result = await model.generateContent(instruction + "\nUser: " + userPrompt);
   const response = await result.response;
 
-  return response.text().trim().slice(0, 400);
+  return response.text().trim();
 }
 
 // ===== NARRATIVA =====
@@ -80,13 +80,19 @@ ${userPrompt}
   return response.text();
 }
 
-// ===== IMAGEN ROBUSTA =====
+// ===== GENERACIÓN DE IMAGEN (CORREGIDA) =====
 async function generateImage(userPrompt) {
 
   const finalPrompt = await buildImagePrompt(userPrompt);
-  const encoded = encodeURIComponent(finalPrompt);
 
-  const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&seed=${Math.floor(Math.random()*100000)}`;
+  // 🔥 limpiar + recortar (CLAVE)
+  const cleanPrompt = finalPrompt
+    .replace(/["']/g, "")
+    .slice(0, 250);
+
+  const encoded = encodeURIComponent(cleanPrompt);
+
+  const url = `https://pollinations.ai/p/${encoded}?width=1024&height=1024&seed=${Math.floor(Math.random()*100000)}&nologo=true`;
 
   for (let i = 0; i < 3; i++) {
     try {

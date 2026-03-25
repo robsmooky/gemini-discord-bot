@@ -16,6 +16,7 @@ const client = new Client({
 const processedMessages = new Set();
 const cooldown = new Map();
 
+// ===== DETECCIÓN =====
 function isImageRequest(text) {
     return /(imagen|dibujo|dibujar|draw|imagine|pintar|crear imagen|hazme.*(dibujo|imagen))/i.test(text);
 }
@@ -32,10 +33,12 @@ client.on("messageCreate", async (message) => {
 
     if (message.author.bot) return;
 
+    // evitar duplicados
     if (processedMessages.has(message.id)) return;
     processedMessages.add(message.id);
     setTimeout(() => processedMessages.delete(message.id), 60000);
 
+    // cooldown
     const now = Date.now();
     const last = cooldown.get(message.author.id) || 0;
     if (now - last < 3000) return;
@@ -44,16 +47,19 @@ client.on("messageCreate", async (message) => {
     let trigger = false;
     let content = message.content.trim();
 
+    // mención
     if (message.mentions.has(client.user)) {
         trigger = true;
         content = content.replace(/<@!?[0-9]+>/, "").trim();
     }
 
+    // "Gemini ..."
     if (startsWithGemini(content)) {
         trigger = true;
         content = content.replace(/^gemini[\s:,.!?-]*/i, "").trim();
     }
 
+    // respuesta al bot
     if (message.reference) {
         try {
             const replied = await message.channel.messages.fetch(message.reference.messageId);
@@ -74,15 +80,19 @@ client.on("messageCreate", async (message) => {
 
             const loadingMsg = await message.reply("🎨 Generando imagen...");
 
-            const imageBuffer = await generateImage(content);
+            const [imageBuffer, narrative] = await Promise.all([
+                generateImage(content),
+                buildImageNarrative(content)
+            ]);
 
             if (!imageBuffer) {
                 return loadingMsg.edit("No pude generar la imagen esta vez 😅 Inténtalo de nuevo.");
             }
 
-            const narrative = await buildImageNarrative(content);
+            // eliminar mensaje de carga
+            await loadingMsg.delete().catch(() => {});
 
-            return loadingMsg.edit({
+            return message.reply({
                 content: narrative,
                 files: [{
                     attachment: imageBuffer,
