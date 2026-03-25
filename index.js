@@ -23,7 +23,7 @@ const client = new Client({
 const processedMessages = new Set();
 const cooldown = new Map();
 
-// ===== DETECCIÓN INTELIGENTE =====
+// ===== DETECCIÓN =====
 function isImageRequest(text) {
 
     const creationIntent = /(haz|crea|genera|dibuja|pinta|imagina|make|create|draw|generate)/i;
@@ -157,7 +157,7 @@ client.on("messageCreate", async (message) => {
     }
 });
 
-// ===== SLASH COMMAND =====
+// ===== SLASH =====
 client.on("interactionCreate", async (interaction) => {
 
     if (!interaction.isChatInputCommand()) return;
@@ -187,14 +187,14 @@ client.on("interactionCreate", async (interaction) => {
     }
 });
 
-// ===== REGISTRO SLASH =====
+// ===== REGISTRO =====
 const commands = [
     new SlashCommandBuilder()
         .setName("imagen")
         .setDescription("Genera una imagen")
         .addStringOption(option =>
             option.setName("prompt")
-                .setDescription("Descripción de la imagen")
+                .setDescription("Descripción")
                 .setRequired(true)
         )
         .toJSON()
@@ -204,14 +204,11 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
 (async () => {
     try {
-        console.log("Registrando comandos slash...");
-
         await rest.put(
             Routes.applicationCommands(process.env.CLIENT_ID),
             { body: commands }
         );
-
-        console.log("Comandos registrados.");
+        console.log("Comandos registrados");
     } catch (error) {
         console.error(error);
     }

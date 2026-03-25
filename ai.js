@@ -45,19 +45,23 @@ async function askGemini(history, userMessage) {
   }
 }
 
-// ===== PROMPT =====
+// ===== PROMPT SIMPLIFICADO =====
 async function buildImagePrompt(userPrompt) {
+
   const instruction = `
-You are an expert AI image prompt engineer.
+Rewrite this into a SHORT and SIMPLE image prompt.
 
-Choose best style (realistic, anime, digital art, oil painting).
-Describe subject, action, environment, lighting.
-Keep it clean and natural.
+Rules:
+- Max 10-15 words
+- Only essential elements
+- No artistic or cinematic terms
+- No extra adjectives
 
-Output ONLY the prompt.
+User request:
+${userPrompt}
 `;
 
-  const result = await model.generateContent(instruction + "\nUser: " + userPrompt);
+  const result = await model.generateContent(instruction);
   const response = await result.response;
 
   return response.text().trim();
@@ -80,45 +84,49 @@ ${userPrompt}
   return response.text();
 }
 
-// ===== GENERACIÓN DE IMAGEN (ROBUSTA) =====
+// ===== GENERACIÓN ROBUSTA =====
 async function generateImage(userPrompt) {
 
-  const finalPrompt = await buildImagePrompt(userPrompt);
+  const tryPrompt = async (prompt) => {
 
-  const cleanPrompt = finalPrompt
-    .replace(/["']/g, "")
-    .slice(0, 200);
+    const clean = prompt
+      .replace(/["']/g, "")
+      .slice(0, 120);
 
-  const encoded = encodeURIComponent(cleanPrompt);
+    const encoded = encodeURIComponent(clean);
 
-  const url = `https://pollinations.ai/p/${encoded}?width=1024&height=1024&seed=${Math.floor(Math.random()*100000)}&nologo=true`;
+    const url = `https://pollinations.ai/p/${encoded}?width=1024&height=1024&seed=${Math.floor(Math.random()*100000)}&nologo=true`;
 
-  for (let i = 0; i < 4; i++) {
+    const res = await fetch(url);
 
-    try {
-      const res = await fetch(url);
+    const contentType = res.headers.get("content-type") || "";
 
-      const contentType = res.headers.get("content-type") || "";
-
-      // validar que sea imagen
-      if (!res.ok || !contentType.startsWith("image")) {
-        throw new Error("Respuesta no es imagen");
-      }
-
-      const buffer = await res.arrayBuffer();
-
-      // validar tamaño mínimo
-      if (buffer.byteLength < 10000) {
-        throw new Error("Imagen demasiado pequeña");
-      }
-
-      return Buffer.from(buffer);
-
-    } catch (err) {
-      console.log(`Intento ${i + 1} fallido:`, err.message);
+    if (!res.ok || !contentType.startsWith("image")) {
+      throw new Error("No image");
     }
 
-    await new Promise(r => setTimeout(r, 1500));
+    const buffer = await res.arrayBuffer();
+
+    if (buffer.byteLength < 10000) {
+      throw new Error("Too small");
+    }
+
+    return Buffer.from(buffer);
+  };
+
+  // intento 1: prompt simplificado por IA
+  try {
+    const simplePrompt = await buildImagePrompt(userPrompt);
+    return await tryPrompt(simplePrompt);
+  } catch (err) {
+    console.log("Fallback a prompt original...");
+  }
+
+  // intento 2: prompt original
+  try {
+    return await tryPrompt(userPrompt);
+  } catch (err) {
+    console.log("También falló el prompt original");
   }
 
   return null;
