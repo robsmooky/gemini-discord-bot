@@ -43,7 +43,6 @@ function isImageRequest(text) {
 
     if (creationIntent.test(text) && imageWords.test(text)) return true;
 
-    // evitar falsos positivos
     if (/(analiza|explica|describe|qué es|que es)/i.test(text)) return false;
 
     return false;
@@ -53,7 +52,7 @@ function startsWithGemini(text) {
     return /^gemini[\s:,.!?-]/i.test(text);
 }
 
-// ===== BOT READY =====
+// ===== READY =====
 client.on("ready", () => {
     console.log(`Bot conectado como ${client.user.tag}`);
 });
@@ -63,12 +62,10 @@ client.on("messageCreate", async (message) => {
 
     if (message.author.bot) return;
 
-    // anti-duplicados
     if (processedMessages.has(message.id)) return;
     processedMessages.add(message.id);
     setTimeout(() => processedMessages.delete(message.id), 60000);
 
-    // cooldown
     const now = Date.now();
     const last = cooldown.get(message.author.id) || 0;
     if (now - last < 3000) return;
@@ -77,19 +74,16 @@ client.on("messageCreate", async (message) => {
     let trigger = false;
     let content = message.content.trim();
 
-    // mención
     if (message.mentions.has(client.user)) {
         trigger = true;
         content = content.replace(/<@!?[0-9]+>/, "").trim();
     }
 
-    // "Gemini ..."
     if (startsWithGemini(content)) {
         trigger = true;
         content = content.replace(/^gemini[\s:,.!?-]*/i, "").trim();
     }
 
-    // respuesta al bot
     if (message.reference) {
         try {
             const replied = await message.channel.messages.fetch(message.reference.messageId);
@@ -105,7 +99,7 @@ client.on("messageCreate", async (message) => {
 
     try {
 
-        // ===== IMAGEN POR TEXTO =====
+        // ===== IMAGEN =====
         if (isImageRequest(content)) {
 
             const loadingMsg = await message.reply("🎨 Generando imagen...");
@@ -193,7 +187,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 });
 
-// ===== REGISTRO DE SLASH =====
+// ===== REGISTRO SLASH =====
 const commands = [
     new SlashCommandBuilder()
         .setName("imagen")

@@ -80,30 +80,43 @@ ${userPrompt}
   return response.text();
 }
 
-// ===== GENERACIÓN DE IMAGEN (CORREGIDA) =====
+// ===== GENERACIÓN DE IMAGEN (ROBUSTA) =====
 async function generateImage(userPrompt) {
 
   const finalPrompt = await buildImagePrompt(userPrompt);
 
-  // 🔥 limpiar + recortar (CLAVE)
   const cleanPrompt = finalPrompt
     .replace(/["']/g, "")
-    .slice(0, 250);
+    .slice(0, 200);
 
   const encoded = encodeURIComponent(cleanPrompt);
 
   const url = `https://pollinations.ai/p/${encoded}?width=1024&height=1024&seed=${Math.floor(Math.random()*100000)}&nologo=true`;
 
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
+
     try {
       const res = await fetch(url);
 
-      if (res.ok) {
-        const buffer = await res.arrayBuffer();
-        return Buffer.from(buffer);
+      const contentType = res.headers.get("content-type") || "";
+
+      // validar que sea imagen
+      if (!res.ok || !contentType.startsWith("image")) {
+        throw new Error("Respuesta no es imagen");
       }
 
-    } catch {}
+      const buffer = await res.arrayBuffer();
+
+      // validar tamaño mínimo
+      if (buffer.byteLength < 10000) {
+        throw new Error("Imagen demasiado pequeña");
+      }
+
+      return Buffer.from(buffer);
+
+    } catch (err) {
+      console.log(`Intento ${i + 1} fallido:`, err.message);
+    }
 
     await new Promise(r => setTimeout(r, 1500));
   }
