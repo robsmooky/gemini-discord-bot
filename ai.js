@@ -38,76 +38,66 @@ async function askGemini(history, userMessage) {
     return response.text();
 
   } catch (err) {
-
-    if (
-      err.message?.includes("SAFETY") ||
-      err.message?.includes("blocked")
-    ) {
-      return "Vaya… eso que me pides es un poco demasiado explícito incluso para mí. Bajemos el tono 😉";
+    if (err.message?.includes("SAFETY")) {
+      return "Vaya… eso es demasiado explícito incluso para mí. Bajemos el tono 😉";
     }
-
     throw err;
   }
 }
 
-// ===== GENERADOR DE PROMPTS =====
+// ===== PROMPT DE IMAGEN =====
 async function buildImagePrompt(userPrompt) {
-
-  const promptBuilder = genAI.getGenerativeModel({
-    model: "gemini-3.1-flash-lite-preview",
-    safetySettings
-  });
 
   const instruction = `
 You are an expert AI image prompt engineer.
 
-1. Choose best style:
-- photorealistic
-- digital art
-- anime
-- oil painting
-
-2. Write a detailed prompt in English including:
-- subject
-- action
-- environment
-- style
-- lighting
-
-3. Add only relevant technical modifiers.
-
-4. Keep it clean, not overloaded.
+Choose best style (realistic, anime, digital art, oil painting).
+Describe subject, action, environment, lighting.
+Keep it clean and natural.
 
 Output ONLY the prompt.
 `;
 
-  const result = await promptBuilder.generateContent(
-    instruction + "\nUser request: " + userPrompt
-  );
-
+  const result = await model.generateContent(instruction + "\nUser: " + userPrompt);
   const response = await result.response;
 
-  return response.text().trim();
+  return response.text().trim().slice(0, 400);
 }
 
+// ===== NARRATIVA =====
+async function buildImageNarrative(userPrompt) {
+
+  const prompt = `
+Create:
+1. A short creative title
+2. A cinematic description (2-3 lines)
+
+Based on:
+${userPrompt}
+`;
+
+  const result = await model.generateContent(prompt);
+  const response = await result.response;
+
+  return response.text();
+}
+
+// ===== GENERAR IMAGEN =====
 async function generateImage(userPrompt) {
-  try {
-    const finalPrompt = await buildImagePrompt(userPrompt);
 
-    const encoded = encodeURIComponent(finalPrompt);
-    return `https://image.pollinations.ai/prompt/${encoded}`;
+  const finalPrompt = await buildImagePrompt(userPrompt);
 
-  } catch (err) {
+  const encoded = encodeURIComponent(finalPrompt);
 
-    if (
-      err.message?.includes("SAFETY") ||
-      err.message?.includes("blocked")
-    ) {
-      return "⚠️ No puedo generar esa imagen, es demasiado explícita.";
-    }
+  const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&seed=${Math.floor(Math.random()*100000)}`;
 
-    throw err;
-  }
+  const res = await fetch(url);
+
+  if (!res.ok) throw new Error("Error al generar imagen");
+
+  const buffer = await res.arrayBuffer();
+
+  return Buffer.from(buffer);
 }
 
-module.exports = { askGemini, generateImage };
+module.exports = { askGemini, generateImage, buildImageNarrative };

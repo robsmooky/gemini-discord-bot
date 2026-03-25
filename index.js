@@ -1,7 +1,7 @@
 require("dotenv").config();
 
 const { Client, GatewayIntentBits } = require("discord.js");
-const { askGemini, generateImage } = require("./ai");
+const { askGemini, generateImage, buildImageNarrative } = require("./ai");
 const { getMemory, saveMemory } = require("./memory");
 const splitMessage = require("./splitMessage");
 
@@ -16,13 +16,8 @@ const client = new Client({
 const processedMessages = new Set();
 const cooldown = new Map();
 
-// ===== DETECCIÓN INTELIGENTE =====
 function isImageRequest(text) {
     return /(imagen|dibujo|dibujar|draw|imagine|pintar|crear imagen|hazme.*(dibujo|imagen))/i.test(text);
-}
-
-function wantsExplanation(text) {
-    return /(explica|describe|qué es|que es|details|explain|describe)/i.test(text);
 }
 
 function startsWithGemini(text) {
@@ -37,12 +32,10 @@ client.on("messageCreate", async (message) => {
 
     if (message.author.bot) return;
 
-    // evitar duplicados
     if (processedMessages.has(message.id)) return;
     processedMessages.add(message.id);
     setTimeout(() => processedMessages.delete(message.id), 60000);
 
-    // cooldown
     const now = Date.now();
     const last = cooldown.get(message.author.id) || 0;
     if (now - last < 3000) return;
@@ -51,19 +44,16 @@ client.on("messageCreate", async (message) => {
     let trigger = false;
     let content = message.content.trim();
 
-    // mención
     if (message.mentions.has(client.user)) {
         trigger = true;
         content = content.replace(/<@!?[0-9]+>/, "").trim();
     }
 
-    // Gemini al inicio
     if (startsWithGemini(content)) {
         trigger = true;
         content = content.replace(/^gemini[\s:,.!?-]*/i, "").trim();
     }
 
-    // respuesta al bot
     if (message.reference) {
         try {
             const replied = await message.channel.messages.fetch(message.reference.messageId);
@@ -81,21 +71,21 @@ client.on("messageCreate", async (message) => {
 
     try {
 
-        // ===== IMAGEN =====
+        // ===== IMAGEN PRO =====
         if (isImageRequest(content)) {
 
-            const imageUrl = await generateImage(content);
+            const [imageBuffer, narrative] = await Promise.all([
+                generateImage(content),
+                buildImageNarrative(content)
+            ]);
 
-            // imagen + explicación en UNA llamada
-            if (wantsExplanation(content)) {
-
-                const explanation = await askGemini([], `Describe this scene in a natural way:\n${content}`);
-
-                await message.reply(imageUrl);
-                return message.channel.send(explanation);
-            }
-
-            return message.reply(imageUrl);
+            return message.reply({
+                content: narrative,
+                files: [{
+                    attachment: imageBuffer,
+                    name: "imagen.png"
+                }]
+            });
         }
 
         // ===== TEXTO =====
@@ -126,7 +116,7 @@ client.on("messageCreate", async (message) => {
 
     } catch (err) {
         console.error(err);
-        message.reply("Ha ocurrido un error al contactar con Gemini.");
+        message.reply("Ha ocurrido un error.");
     }
 
 });
