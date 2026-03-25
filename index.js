@@ -13,18 +13,20 @@ const client = new Client({
     ]
 });
 
-// evitar duplicados
 const processedMessages = new Set();
-
-// cooldown por usuario
 const cooldown = new Map();
+
+// ===== DETECCIÓN INTELIGENTE =====
+function isImageRequest(text) {
+    return /(imagen|dibujo|dibujar|draw|imagine|pintar|crear imagen|hazme.*(dibujo|imagen))/i.test(text);
+}
+
+function wantsExplanation(text) {
+    return /(explica|describe|qué es|que es|details|explain|describe)/i.test(text);
+}
 
 function startsWithGemini(text) {
     return /^gemini[\s:,.!?-]/i.test(text);
-}
-
-function isImageRequest(text) {
-    return /^(imagine|imagen|dibujar|draw|create image)/i.test(text);
 }
 
 client.on("ready", () => {
@@ -35,12 +37,12 @@ client.on("messageCreate", async (message) => {
 
     if (message.author.bot) return;
 
-    // evitar mensajes duplicados
+    // evitar duplicados
     if (processedMessages.has(message.id)) return;
     processedMessages.add(message.id);
     setTimeout(() => processedMessages.delete(message.id), 60000);
 
-    // cooldown (3 segundos)
+    // cooldown
     const now = Date.now();
     const last = cooldown.get(message.author.id) || 0;
     if (now - last < 3000) return;
@@ -55,7 +57,7 @@ client.on("messageCreate", async (message) => {
         content = content.replace(/<@!?[0-9]+>/, "").trim();
     }
 
-    // empieza por Gemini
+    // Gemini al inicio
     if (startsWithGemini(content)) {
         trigger = true;
         content = content.replace(/^gemini[\s:,.!?-]*/i, "").trim();
@@ -79,28 +81,24 @@ client.on("messageCreate", async (message) => {
 
     try {
 
-        // ===== GENERACIÓN DE IMÁGENES =====
+        // ===== IMAGEN =====
         if (isImageRequest(content)) {
 
-            const prompt = content.replace(/^(imagine|imagen|dibujar|draw|create image)\s*/i, "");
+            const imageUrl = await generateImage(content);
 
-            const imageBase64 = await generateImage(prompt);
+            // imagen + explicación en UNA llamada
+            if (wantsExplanation(content)) {
 
-            if (!imageBase64) {
-                return message.reply("No se pudo generar la imagen.");
+                const explanation = await askGemini([], `Describe this scene in a natural way:\n${content}`);
+
+                await message.reply(imageUrl);
+                return message.channel.send(explanation);
             }
 
-            const buffer = Buffer.from(imageBase64, "base64");
-
-            return message.reply({
-                files: [{
-                    attachment: buffer,
-                    name: "image.png"
-                }]
-            });
+            return message.reply(imageUrl);
         }
 
-        // ===== TEXTO (GEMINI NORMAL) =====
+        // ===== TEXTO =====
         const userId = message.author.id;
 
         let history = getMemory(userId);
@@ -119,13 +117,11 @@ client.on("messageCreate", async (message) => {
         const messages = splitMessage(reply);
 
         for (let i = 0; i < messages.length; i++) {
-
             if (i === 0) {
                 await message.reply(messages[i]);
             } else {
                 await message.channel.send(messages[i]);
             }
-
         }
 
     } catch (err) {
