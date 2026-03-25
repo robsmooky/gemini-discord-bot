@@ -67,19 +67,22 @@ client.on("messageCreate", async (message) => {
 
     if (!content) content = "Hola";
 
-    await message.channel.sendTyping();
-
     try {
 
-        // ===== IMAGEN PRO =====
+        // ===== IMAGEN =====
         if (isImageRequest(content)) {
 
-            const [imageBuffer, narrative] = await Promise.all([
-                generateImage(content),
-                buildImageNarrative(content)
-            ]);
+            const loadingMsg = await message.reply("🎨 Generando imagen...");
 
-            return message.reply({
+            const imageBuffer = await generateImage(content);
+
+            if (!imageBuffer) {
+                return loadingMsg.edit("No pude generar la imagen esta vez 😅 Inténtalo de nuevo.");
+            }
+
+            const narrative = await buildImageNarrative(content);
+
+            return loadingMsg.edit({
                 content: narrative,
                 files: [{
                     attachment: imageBuffer,
@@ -89,6 +92,8 @@ client.on("messageCreate", async (message) => {
         }
 
         // ===== TEXTO =====
+        await message.channel.sendTyping();
+
         const userId = message.author.id;
 
         let history = getMemory(userId);

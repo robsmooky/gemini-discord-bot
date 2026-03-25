@@ -45,9 +45,8 @@ async function askGemini(history, userMessage) {
   }
 }
 
-// ===== PROMPT DE IMAGEN =====
+// ===== PROMPT =====
 async function buildImagePrompt(userPrompt) {
-
   const instruction = `
 You are an expert AI image prompt engineer.
 
@@ -66,7 +65,6 @@ Output ONLY the prompt.
 
 // ===== NARRATIVA =====
 async function buildImageNarrative(userPrompt) {
-
   const prompt = `
 Create:
 1. A short creative title
@@ -82,22 +80,29 @@ ${userPrompt}
   return response.text();
 }
 
-// ===== GENERAR IMAGEN =====
+// ===== IMAGEN ROBUSTA =====
 async function generateImage(userPrompt) {
 
   const finalPrompt = await buildImagePrompt(userPrompt);
-
   const encoded = encodeURIComponent(finalPrompt);
 
   const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&seed=${Math.floor(Math.random()*100000)}`;
 
-  const res = await fetch(url);
+  for (let i = 0; i < 3; i++) {
+    try {
+      const res = await fetch(url);
 
-  if (!res.ok) throw new Error("Error al generar imagen");
+      if (res.ok) {
+        const buffer = await res.arrayBuffer();
+        return Buffer.from(buffer);
+      }
 
-  const buffer = await res.arrayBuffer();
+    } catch {}
 
-  return Buffer.from(buffer);
+    await new Promise(r => setTimeout(r, 1500));
+  }
+
+  return null;
 }
 
 module.exports = { askGemini, generateImage, buildImageNarrative };
