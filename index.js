@@ -2,13 +2,10 @@ require("dotenv").config();
 
 const { 
     Client, 
-    GatewayIntentBits, 
-    REST, 
-    Routes, 
-    SlashCommandBuilder 
+    GatewayIntentBits 
 } = require("discord.js");
 
-const { askGemini, generateImage, buildImageNarrative } = require("./ai");
+const { askGemini } = require("./ai");
 const { getMemory, saveMemory } = require("./memory");
 const splitMessage = require("./splitMessage");
 
@@ -23,7 +20,7 @@ const client = new Client({
 const processedMessages = new Set();
 const cooldown = new Map();
 
-// ===== DETECCIÓN =====
+// ===== DETECCIÓN DE IMAGEN =====
 function isImageRequest(text) {
 
     const creationIntent = /(haz|crea|genera|dibuja|pinta|imagina|make|create|draw|generate)/i;
@@ -40,10 +37,7 @@ function isImageRequest(text) {
     ];
 
     if (strongPatterns.some(p => p.test(text))) return true;
-
     if (creationIntent.test(text) && imageWords.test(text)) return true;
-
-    if (/(analiza|explica|describe|qué es|que es)/i.test(text)) return false;
 
     return false;
 }
@@ -74,16 +68,19 @@ client.on("messageCreate", async (message) => {
     let trigger = false;
     let content = message.content.trim();
 
+    // mención
     if (message.mentions.has(client.user)) {
         trigger = true;
         content = content.replace(/<@!?[0-9]+>/, "").trim();
     }
 
+    // "Gemini ..."
     if (startsWithGemini(content)) {
         trigger = true;
         content = content.replace(/^gemini[\s:,.!?-]*/i, "").trim();
     }
 
+    // respuesta al bot
     if (message.reference) {
         try {
             const replied = await message.channel.messages.fetch(message.reference.messageId);
@@ -99,29 +96,12 @@ client.on("messageCreate", async (message) => {
 
     try {
 
-        // ===== IMAGEN =====
+        // ===== SI PIDEN IMAGEN =====
         if (isImageRequest(content)) {
-
-            const loadingMsg = await message.reply("🎨 Generando imagen...");
-
-            const [imageBuffer, narrative] = await Promise.all([
-                generateImage(content),
-                buildImageNarrative(content)
-            ]);
-
-            if (!imageBuffer) {
-                return loadingMsg.edit("No pude generar la imagen 😅 Inténtalo de nuevo.");
-            }
-
-            await loadingMsg.delete().catch(() => {});
-
-            return message.reply({
-                content: narrative,
-                files: [{
-                    attachment: imageBuffer,
-                    name: "imagen.png"
-                }]
-            });
+            return message.reply(
+                "Ahora mismo no puedo generar imágenes 😅\n" +
+                "Pero puedo ayudarte a describirla o crear un prompt si quieres."
+            );
         }
 
         // ===== TEXTO =====
@@ -155,63 +135,7 @@ client.on("messageCreate", async (message) => {
         console.error(err);
         message.reply("Ha ocurrido un error.");
     }
+
 });
-
-// ===== SLASH =====
-client.on("interactionCreate", async (interaction) => {
-
-    if (!interaction.isChatInputCommand()) return;
-
-    if (interaction.commandName === "imagen") {
-
-        const prompt = interaction.options.getString("prompt");
-
-        await interaction.reply("🎨 Generando imagen...");
-
-        const [imageBuffer, narrative] = await Promise.all([
-            generateImage(prompt),
-            buildImageNarrative(prompt)
-        ]);
-
-        if (!imageBuffer) {
-            return interaction.editReply("No pude generar la imagen 😅");
-        }
-
-        await interaction.editReply({
-            content: narrative,
-            files: [{
-                attachment: imageBuffer,
-                name: "imagen.png"
-            }]
-        });
-    }
-});
-
-// ===== REGISTRO =====
-const commands = [
-    new SlashCommandBuilder()
-        .setName("imagen")
-        .setDescription("Genera una imagen")
-        .addStringOption(option =>
-            option.setName("prompt")
-                .setDescription("Descripción")
-                .setRequired(true)
-        )
-        .toJSON()
-];
-
-const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
-
-(async () => {
-    try {
-        await rest.put(
-            Routes.applicationCommands(process.env.CLIENT_ID),
-            { body: commands }
-        );
-        console.log("Comandos registrados");
-    } catch (error) {
-        console.error(error);
-    }
-})();
 
 client.login(process.env.DISCORD_TOKEN);
