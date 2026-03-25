@@ -17,26 +17,37 @@ const client = new Client({
 const processedMessages = new Set();
 const cooldown = new Map();
 
+// ===== CONFIG =====
+const DISABLED_CONTEXT_CHANNELS = [
+    "1263597369677582492" // canal de política
+];
+
 // ===== DETECCIÓN =====
 function startsWithGemini(text) {
     return /^gemini[\s:,.!?-]/i.test(text);
 }
 
-// decidir cuándo usar contexto
+function isOpinionRequest(text) {
+    return /(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón|quien tiene razon)/i.test(text);
+}
+
 function shouldUseContext(content, message) {
+
+    if (DISABLED_CONTEXT_CHANNELS.includes(message.channel.id)) {
+        return false;
+    }
 
     if (content.length < 80) return true;
 
     if (message.reference) return true;
 
-    if (/(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón)/i.test(content)) return true;
+    if (isOpinionRequest(content)) return true;
 
     return false;
 }
 
 // ===== FILTRAR MENSAJES =====
 function filterMessages(messages) {
-
     return messages
         .filter(m =>
             !m.author.bot &&
@@ -44,7 +55,7 @@ function filterMessages(messages) {
             m.content.length > 3 &&
             !m.content.startsWith("http")
         )
-        .slice(-8); // máximo 8 mensajes relevantes
+        .slice(-8);
 }
 
 // ===== RESUMIR CONTEXTO =====
@@ -61,31 +72,26 @@ Resume this conversation briefly.
 
 - Who is saying what
 - Main disagreement or topic
-- Keep it under 5 lines
+- Max 5 lines
 
 Conversation:
 ${raw}
 `;
 
-    const summary = await askGemini([], prompt);
-
-    return summary;
+    return await askGemini([], prompt);
 }
 
-// ===== CONSTRUIR CONTEXTO INTELIGENTE =====
+// ===== CONSTRUIR CONTEXTO =====
 async function buildSmartContext(message) {
 
     const fetched = await message.channel.messages.fetch({ limit: 15 });
-
     const ordered = [...fetched.values()].reverse();
-
     const filtered = filterMessages(ordered);
 
     if (filtered.length < 2) return null;
 
     try {
         const summary = await summarizeContext(filtered);
-
         return `Contexto de la conversación:\n${summary}`;
     } catch {
         return null;
@@ -120,7 +126,7 @@ client.on("messageCreate", async (message) => {
         content = content.replace(/<@!?[0-9]+>/, "").trim();
     }
 
-    // Gemini al inicio
+    // "Gemini ..."
     if (startsWithGemini(content)) {
         trigger = true;
         content = content.replace(/^gemini[\s:,.!?-]*/i, "").trim();
@@ -149,7 +155,14 @@ client.on("messageCreate", async (message) => {
 
         let finalInput = content;
 
-        // ===== CONTEXTO ULTRA PRO =====
+        const isRestrictedChannel = DISABLED_CONTEXT_CHANNELS.includes(message.channel.id);
+
+        // ===== BLOQUEO SOLO PARA DEBATES =====
+        if (isRestrictedChannel && isOpinionRequest(content)) {
+            return message.reply("Prefiero no analizar debates en este canal 🙂");
+        }
+
+        // ===== CONTEXTO INTELIGENTE =====
         if (shouldUseContext(content, message)) {
 
             const context = await buildSmartContext(message);
@@ -161,7 +174,6 @@ client.on("messageCreate", async (message) => {
 
         const reply = await askGemini(history, finalInput);
 
-        // guardar SOLO input original
         history.push(
             { role: "user", parts: [{ text: content }] },
             { role: "model", parts: [{ text: reply }] }
