@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const { Client, GatewayIntentBits } = require("discord.js");
+const fetch = require("node-fetch");
 
 const { askGemini } = require("./ai");
 const { getMemory, saveMemory } = require("./memory");
@@ -56,7 +57,7 @@ function shouldStoreMessage(text) {
     return true;
 }
 
-// ===== CONTEXTO COMO HISTORIAL REAL =====
+// ===== CONTEXTO =====
 async function injectContextAsHistory(history, message) {
 
     const fetched = await message.channel.messages.fetch({ limit: 15 });
@@ -73,7 +74,6 @@ async function injectContextAsHistory(history, message) {
         .slice(-CONFIG.contextMessages);
 
     for (const msg of filtered) {
-
         history.push({
             role: "user",
             parts: [{
@@ -83,6 +83,31 @@ async function injectContextAsHistory(history, message) {
     }
 
     return history;
+}
+
+// ===== IMÁGENES =====
+async function getImageParts(message) {
+
+    if (!message.attachments.size) return [];
+
+    const parts = [];
+
+    for (const attachment of message.attachments.values()) {
+
+        if (!attachment.contentType?.startsWith("image/")) continue;
+
+        const res = await fetch(attachment.url);
+        const buffer = await res.arrayBuffer();
+
+        parts.push({
+            inlineData: {
+                data: Buffer.from(buffer).toString("base64"),
+                mimeType: attachment.contentType
+            }
+        });
+    }
+
+    return parts;
 }
 
 // ===== READY =====
@@ -131,7 +156,7 @@ client.on("messageCreate", async (message) => {
 
     if (!trigger) return;
 
-    if (!content) content = "Hola";
+    if (!content) content = "Describe esta imagen";
 
     try {
 
@@ -148,22 +173,34 @@ client.on("messageCreate", async (message) => {
             return message.reply("Prefiero no analizar debates en este canal 🙂");
         }
 
-        // ===== CONTEXTO =====
+        // contexto
         if (message.reference || isOpinionRequest(content)) {
             history = await injectContextAsHistory(history, message);
         }
 
+        // 🖼️ imagen
+        const imageParts = await getImageParts(message);
+
+        const contentParts = [];
+
+        if (content) {
+            contentParts.push({ text: content });
+        }
+
+        contentParts.push(...imageParts);
+
         console.log({
             user: message.author.username,
             content,
+            images: imageParts.length,
             historyLength: history.length
         });
 
-        let reply = await askGemini(history, content);
+        let reply = await askGemini(history, contentParts);
 
         reply = cleanResponse(reply);
 
-        // ===== GUARDAR MEMORIA =====
+        // guardar memoria (solo texto)
         if (shouldStoreMessage(content) && shouldStoreMessage(reply)) {
 
             history.push(

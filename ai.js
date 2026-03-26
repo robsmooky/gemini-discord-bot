@@ -4,12 +4,13 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// ✅ tus modelos en orden de prioridad
 const models = [
-    "gemini-2.5-flash",
-    "gemini-1.5-flash"
+    "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash"
 ];
 
-async function tryModel(modelName, history, content) {
+async function tryModel(modelName, history, contentParts) {
 
     const model = genAI.getGenerativeModel({ model: modelName });
 
@@ -17,12 +18,19 @@ async function tryModel(modelName, history, content) {
         history: Array.isArray(history) ? history : []
     });
 
-    const result = await chat.sendMessage(content);
+    const result = await chat.sendMessage({
+        contents: [
+            {
+                role: "user",
+                parts: contentParts
+            }
+        ]
+    });
 
     return result.response.text();
 }
 
-async function askGemini(history, content) {
+async function askGemini(history, contentParts) {
 
     if (!Array.isArray(history)) history = [];
 
@@ -34,7 +42,7 @@ async function askGemini(history, content) {
                 console.log(`🧠 Modelo: ${modelName} | Intento: ${attempt + 1}`);
                 console.log(`📚 Historial: ${history.length}`);
 
-                return await tryModel(modelName, history, content);
+                return await tryModel(modelName, history, contentParts);
 
             } catch (err) {
 
