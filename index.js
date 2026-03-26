@@ -14,15 +14,14 @@ const client = new Client({
     ]
 });
 
-const processedMessages = new Set();
-const cooldown = new Map();
-
 // ===== CONFIG =====
 const CONFIG = {
     cooldown: 3000,
     maxHistory: 20,
     contextMessages: 6
 };
+
+const cooldown = new Map();
 
 const DISABLED_CONTEXT_CHANNELS = [
     "123456789012345678"
@@ -37,16 +36,6 @@ function isOpinionRequest(text) {
     return /(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón|quien tiene razon)/i.test(text);
 }
 
-// ===== MEMORIA =====
-function shouldStoreMessage(text) {
-
-    if (!text) return false;
-    if (text.length < 5) return false;
-    if (/^(hola|ok|vale|gracias)$/i.test(text)) return false;
-
-    return true;
-}
-
 // ===== LIMPIEZA =====
 function cleanResponse(text) {
     if (!text) return text;
@@ -58,20 +47,17 @@ function cleanResponse(text) {
         .trim();
 }
 
-// ===== CONTEXTO =====
-function shouldUseContext(content, message) {
+// ===== MEMORIA =====
+function shouldStoreMessage(text) {
+    if (!text) return false;
+    if (text.length < 5) return false;
+    if (/^(hola|ok|vale|gracias)$/i.test(text)) return false;
 
-    if (DISABLED_CONTEXT_CHANNELS.includes(message.channel.id)) return false;
-
-    if (message.reference) return true;
-
-    if (isOpinionRequest(content)) return true;
-
-    return false;
+    return true;
 }
 
-// ===== CONTEXTO DIRECTO OPTIMIZADO =====
-async function buildDirectContext(message) {
+// ===== CONTEXTO COMO HISTORIAL REAL =====
+async function injectContextAsHistory(history, message) {
 
     const fetched = await message.channel.messages.fetch({ limit: 15 });
 
@@ -86,20 +72,22 @@ async function buildDirectContext(message) {
         )
         .slice(-CONFIG.contextMessages);
 
-    if (filtered.length < 2) return null;
-
-    let context = "Conversación reciente:\n\n";
-
     for (const msg of filtered) {
-        context += `[Usuario: ${msg.author.username}] dice: ${msg.content}\n`;
+
+        history.push({
+            role: "user",
+            parts: [{
+                text: `[Usuario: ${msg.author.username}] dice: ${msg.content}`
+            }]
+        });
     }
 
-    return context;
+    return history;
 }
 
 // ===== READY =====
 client.on("ready", () => {
-    console.log(`Bot conectado como ${client.user.tag}`);
+    console.log(`✅ Bot conectado como ${client.user.tag}`);
 });
 
 // ===== MENSAJES =====
@@ -107,14 +95,14 @@ client.on("messageCreate", async (message) => {
 
     if (message.author.bot) return;
 
-    if (processedMessages.has(message.id)) return;
-    processedMessages.add(message.id);
-    setTimeout(() => processedMessages.delete(message.id), 60000);
-
+    const key = `${message.author.id}-${message.channel.id}`;
     const now = Date.now();
-    const last = cooldown.get(message.author.id) || 0;
-    if (now - last < CONFIG.cooldown) return;
-    cooldown.set(message.author.id, now);
+
+    if (cooldown.has(key) && now - cooldown.get(key) < CONFIG.cooldown) {
+        return;
+    }
+
+    cooldown.set(key, now);
 
     let trigger = false;
     let content = message.content.trim();
@@ -150,46 +138,32 @@ client.on("messageCreate", async (message) => {
         await message.channel.sendTyping();
 
         const userId = message.author.id;
-        let history = getMemory(userId);
+        const channelId = message.channel.id;
 
-        let finalInput = content;
+        let history = getMemory(userId, channelId);
 
-        const isRestrictedChannel = DISABLED_CONTEXT_CHANNELS.includes(message.channel.id);
+        const isRestrictedChannel = DISABLED_CONTEXT_CHANNELS.includes(channelId);
 
-        // 🚫 canal sensible
         if (isRestrictedChannel && isOpinionRequest(content)) {
             return message.reply("Prefiero no analizar debates en este canal 🙂");
         }
 
         // ===== CONTEXTO =====
-        if (shouldUseContext(content, message)) {
-
-            const context = await buildDirectContext(message);
-
-            if (context) {
-                finalInput = `
-${context}
-
-Usuario actual (${message.author.username}) pregunta:
-${content}
-
-Responde SOLO a este usuario.
-Usa correctamente los nombres.
-No confundas quién dijo qué.
-`;
-            }
+        if (message.reference || isOpinionRequest(content)) {
+            history = await injectContextAsHistory(history, message);
         }
 
-        // ===== FOLLOW-UP =====
-        if (message.reference) {
-            finalInput = `Continuación directa de conversación:\n${finalInput}`;
-        }
+        console.log({
+            user: message.author.username,
+            content,
+            historyLength: history.length
+        });
 
-        let reply = await askGemini(history, finalInput);
+        let reply = await askGemini(history, content);
 
         reply = cleanResponse(reply);
 
-        // ===== MEMORIA =====
+        // ===== GUARDAR MEMORIA =====
         if (shouldStoreMessage(content) && shouldStoreMessage(reply)) {
 
             history.push(
@@ -201,7 +175,7 @@ No confundas quién dijo qué.
                 history = history.slice(-CONFIG.maxHistory);
             }
 
-            saveMemory(userId, history);
+            saveMemory(userId, channelId, history);
         }
 
         const messages = splitMessage(reply);
@@ -216,10 +190,8 @@ No confundas quién dijo qué.
 
     } catch (err) {
         console.error(err);
-
         message.reply("Ahora mismo estoy un poco saturado 😅 Inténtalo en unos segundos.");
     }
-
 });
 
 client.login(process.env.DISCORD_TOKEN);

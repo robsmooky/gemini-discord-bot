@@ -1,40 +1,25 @@
-const Database = require("better-sqlite3");
+const memory = new Map();
 
-const db = new Database("memory.db");
-
-const MAX_HISTORY = 20;
-
-db.prepare(`
-CREATE TABLE IF NOT EXISTS memory (
-    userId TEXT PRIMARY KEY,
-    history TEXT
-)
-`).run();
-
-function getMemory(userId) {
-    const row = db.prepare("SELECT history FROM memory WHERE userId = ?").get(userId);
-
-    if (!row) return [];
-
-    try {
-        return JSON.parse(row.history);
-    } catch {
-        return [];
-    }
+function getKey(userId, channelId) {
+    return `${userId}-${channelId}`;
 }
 
-function saveMemory(userId, history) {
+function getMemory(userId, channelId) {
+    const key = getKey(userId, channelId);
 
-    // limitar memoria
-    if (history.length > MAX_HISTORY) {
-        history = history.slice(-MAX_HISTORY);
-    }
+    const data = memory.get(key) || [];
 
-    db.prepare(`
-        INSERT INTO memory (userId, history)
-        VALUES (?, ?)
-        ON CONFLICT(userId) DO UPDATE SET history=excluded.history
-    `).run(userId, JSON.stringify(history));
+    // 🔥 evitar mutaciones accidentales
+    return JSON.parse(JSON.stringify(data));
 }
 
-module.exports = { getMemory, saveMemory };
+function saveMemory(userId, channelId, history) {
+    const key = getKey(userId, channelId);
+
+    memory.set(key, history);
+}
+
+module.exports = {
+    getMemory,
+    saveMemory
+};
