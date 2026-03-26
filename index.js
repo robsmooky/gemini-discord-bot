@@ -20,11 +20,12 @@ const cooldown = new Map();
 // ===== CONFIG =====
 const CONFIG = {
     cooldown: 3000,
-    maxHistory: 20
+    maxHistory: 20,
+    contextMessages: 6
 };
 
 const DISABLED_CONTEXT_CHANNELS = [
-    "123456789012345678" // cambia por tu canal
+    "123456789012345678"
 ];
 
 // ===== DETECCIÓN =====
@@ -36,23 +37,18 @@ function isOpinionRequest(text) {
     return /(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón|quien tiene razon)/i.test(text);
 }
 
-// ===== MEMORIA INTELIGENTE =====
+// ===== MEMORIA =====
 function shouldStoreMessage(text) {
 
     if (!text) return false;
-
-    // ignorar cosas triviales
     if (text.length < 5) return false;
-
-    // ignorar saludos simples
     if (/^(hola|ok|vale|gracias)$/i.test(text)) return false;
 
     return true;
 }
 
-// ===== LIMPIEZA DE RESPUESTA =====
+// ===== LIMPIEZA =====
 function cleanResponse(text) {
-
     if (!text) return text;
 
     return text
@@ -65,62 +61,40 @@ function cleanResponse(text) {
 // ===== CONTEXTO =====
 function shouldUseContext(content, message) {
 
-    if (DISABLED_CONTEXT_CHANNELS.includes(message.channel.id)) {
-        return false;
-    }
+    if (DISABLED_CONTEXT_CHANNELS.includes(message.channel.id)) return false;
 
-    if (content.length < 80) return true;
     if (message.reference) return true;
+
     if (isOpinionRequest(content)) return true;
 
     return false;
 }
 
-function filterMessages(messages) {
-    return messages
+// ===== CONTEXTO DIRECTO OPTIMIZADO =====
+async function buildDirectContext(message) {
+
+    const fetched = await message.channel.messages.fetch({ limit: 15 });
+
+    const ordered = [...fetched.values()].reverse();
+
+    const filtered = ordered
         .filter(m =>
             !m.author.bot &&
             m.content &&
             m.content.length > 3 &&
             !m.content.startsWith("http")
         )
-        .slice(-8);
-}
-
-async function summarizeContext(messages) {
-
-    let raw = "";
-
-    for (const msg of messages) {
-        raw += `${msg.author.username}: ${msg.content}\n`;
-    }
-
-    const prompt = `
-Resume this conversation briefly:
-- Who says what
-- Main topic
-- Max 5 lines
-
-${raw}
-`;
-
-    return await askGemini([], prompt);
-}
-
-async function buildSmartContext(message) {
-
-    const fetched = await message.channel.messages.fetch({ limit: 15 });
-    const ordered = [...fetched.values()].reverse();
-    const filtered = filterMessages(ordered);
+        .slice(-CONFIG.contextMessages);
 
     if (filtered.length < 2) return null;
 
-    try {
-        const summary = await summarizeContext(filtered);
-        return `Contexto:\n${summary}`;
-    } catch {
-        return null;
+    let context = "Conversación reciente:\n\n";
+
+    for (const msg of filtered) {
+        context += `[Usuario: ${msg.author.username}] dice: ${msg.content}\n`;
     }
+
+    return context;
 }
 
 // ===== READY =====
@@ -157,7 +131,7 @@ client.on("messageCreate", async (message) => {
         content = content.replace(/^gemini[\s:,.!?-]*/i, "").trim();
     }
 
-    // follow-up al bot
+    // respuesta al bot
     if (message.reference) {
         try {
             const replied = await message.channel.messages.fetch(message.reference.messageId);
@@ -182,7 +156,7 @@ client.on("messageCreate", async (message) => {
 
         const isRestrictedChannel = DISABLED_CONTEXT_CHANNELS.includes(message.channel.id);
 
-        // bloqueo de debates en canal restringido
+        // 🚫 canal sensible
         if (isRestrictedChannel && isOpinionRequest(content)) {
             return message.reply("Prefiero no analizar debates en este canal 🙂");
         }
@@ -190,24 +164,32 @@ client.on("messageCreate", async (message) => {
         // ===== CONTEXTO =====
         if (shouldUseContext(content, message)) {
 
-            const context = await buildSmartContext(message);
+            const context = await buildDirectContext(message);
 
             if (context) {
-                finalInput = `${context}\n\nUsuario:\n${content}`;
+                finalInput = `
+${context}
+
+Usuario actual (${message.author.username}) pregunta:
+${content}
+
+Responde SOLO a este usuario.
+Usa correctamente los nombres.
+No confundas quién dijo qué.
+`;
             }
         }
 
-        // ===== FOLLOW-UP INTELIGENTE =====
+        // ===== FOLLOW-UP =====
         if (message.reference) {
-            finalInput = `Mensaje anterior relacionado.\n${finalInput}`;
+            finalInput = `Continuación directa de conversación:\n${finalInput}`;
         }
 
         let reply = await askGemini(history, finalInput);
 
-        // limpiar respuesta
         reply = cleanResponse(reply);
 
-        // ===== MEMORIA INTELIGENTE =====
+        // ===== MEMORIA =====
         if (shouldStoreMessage(content) && shouldStoreMessage(reply)) {
 
             history.push(
@@ -234,7 +216,8 @@ client.on("messageCreate", async (message) => {
 
     } catch (err) {
         console.error(err);
-        message.reply("Ha ocurrido un error.");
+
+        message.reply("Ahora mismo estoy un poco saturado 😅 Inténtalo en unos segundos.");
     }
 
 });
