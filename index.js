@@ -24,9 +24,8 @@ const CONFIG = {
 
 const cooldown = new Map();
 
-const DISABLED_CONTEXT_CHANNELS = [
-    "123456789012345678"
-];
+// 🔴 canal restringido
+const RESTRICTED_CHANNEL_ID = "1263597369677582492";
 
 // ===== DETECCIÓN =====
 function startsWithGemini(text) {
@@ -34,7 +33,7 @@ function startsWithGemini(text) {
 }
 
 function isOpinionRequest(text) {
-    return /(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón|quien tiene razon)/i.test(text);
+    return /(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón|quien tiene razon|quién gana|quien gana|qué es mejor|que es mejor|quién está equivocado|quien esta equivocado)/i.test(text);
 }
 
 // ===== LIMPIEZA =====
@@ -160,6 +159,14 @@ client.on("messageCreate", async (message) => {
 
     try {
 
+        // 🔴 BLOQUEO DE OPINIONES
+        if (
+            message.channel.id === RESTRICTED_CHANNEL_ID &&
+            isOpinionRequest(content)
+        ) {
+            return message.reply("Prefiero no analizar debates en este canal 🙂");
+        }
+
         await message.channel.sendTyping();
 
         const userId = message.author.id;
@@ -167,14 +174,10 @@ client.on("messageCreate", async (message) => {
 
         let history = getMemory(userId, channelId);
 
-        const isRestrictedChannel = DISABLED_CONTEXT_CHANNELS.includes(channelId);
+        // 🔴 NO USAR CONTEXTO EN ESTE CANAL
+        const isRestrictedChannel = channelId === RESTRICTED_CHANNEL_ID;
 
-        if (isRestrictedChannel && isOpinionRequest(content)) {
-            return message.reply("Prefiero no analizar debates en este canal 🙂");
-        }
-
-        // contexto
-        if (message.reference || isOpinionRequest(content)) {
+        if (!isRestrictedChannel && (message.reference || isOpinionRequest(content))) {
             history = await injectContextAsHistory(history, message);
         }
 
@@ -193,14 +196,15 @@ client.on("messageCreate", async (message) => {
             user: message.author.username,
             content,
             images: imageParts.length,
-            historyLength: history.length
+            historyLength: history.length,
+            restricted: isRestrictedChannel
         });
 
         let reply = await askGemini(history, contentParts);
 
         reply = cleanResponse(reply);
 
-        // guardar memoria (solo texto)
+        // guardar memoria (esto sí se mantiene)
         if (shouldStoreMessage(content) && shouldStoreMessage(reply)) {
 
             history.push(
