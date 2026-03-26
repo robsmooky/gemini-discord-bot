@@ -4,7 +4,6 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// ✅ tus modelos en orden de prioridad
 const models = [
     "gemini-3.1-flash-lite-preview",
     "gemini-2.5-flash"
@@ -18,14 +17,8 @@ async function tryModel(modelName, history, contentParts) {
         history: Array.isArray(history) ? history : []
     });
 
-    const result = await chat.sendMessage({
-        contents: [
-            {
-                role: "user",
-                parts: contentParts
-            }
-        ]
-    });
+    // ✅ FORMA CORRECTA
+    const result = await chat.sendMessage(contentParts);
 
     return result.response.text();
 }
@@ -49,6 +42,7 @@ async function askGemini(history, contentParts) {
                 const status = err?.status || err?.response?.status;
 
                 console.log(`❌ Error con ${modelName}:`, status);
+                console.log("Detalle error:", err?.message);
 
                 if (status === 503 || status === 429) {
                     await new Promise(r => setTimeout(r, 1500));
