@@ -35,6 +35,10 @@ function isOpinionRequest(text) {
     return /(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón|quien tiene razon|quién gana|quien gana|qué es mejor|que es mejor|quién está equivocado|quien esta equivocado)/i.test(text);
 }
 
+function isNewsRequest(text) {
+    return /(noticias|últimas noticias|ultimas noticias|reciente|recientes|actualidad|hoy|esta semana)/i.test(text);
+}
+
 // ===== LIMPIEZA =====
 function cleanResponse(text) {
     if (!text) return text;
@@ -55,35 +59,22 @@ function shouldStoreMessage(text) {
     return true;
 }
 
-// 🔥 LIMPIEZA DE HISTORIAL (ANTI-BUG)
+// ===== SANITIZE =====
 function sanitizeHistory(history) {
 
     if (!Array.isArray(history)) return [];
 
-    // quitar basura
     let clean = history.filter(m =>
         m &&
         (m.role === "user" || m.role === "model") &&
         Array.isArray(m.parts)
     );
 
-    // asegurar alternancia básica (opcional pero robusto)
-    let fixed = [];
-    let lastRole = null;
-
-    for (const msg of clean) {
-        if (msg.role !== lastRole) {
-            fixed.push(msg);
-            lastRole = msg.role;
-        }
+    while (clean.length && clean[0].role !== "user") {
+        clean.shift();
     }
 
-    // 🔴 asegurar que empieza por user
-    while (fixed.length && fixed[0].role !== "user") {
-        fixed.shift();
-    }
-
-    return fixed;
+    return clean;
 }
 
 // ===== CONTEXTO =====
@@ -112,6 +103,29 @@ async function injectContextAsHistory(history, message) {
     }
 
     return history;
+}
+
+// ===== 📰 OBTENER NOTICIAS =====
+async function fetchNews(query = "videojuegos") {
+
+    const apiKey = process.env.NEWS_API_KEY;
+
+    if (!apiKey) return null;
+
+    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&language=es&sortBy=publishedAt&pageSize=5&apiKey=${apiKey}`;
+
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (!data.articles) return null;
+
+        return data.articles.map(a => `- ${a.title}`).join("\n");
+
+    } catch (err) {
+        console.error("Error fetching news:", err);
+        return null;
+    }
 }
 
 // ===== IMÁGENES =====
@@ -150,13 +164,13 @@ client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
 
     const key = `${message.author.id}-${message.channel.id}`;
-    const now = Date.now();
+    const nowTs = Date.now();
 
-    if (cooldown.has(key) && now - cooldown.get(key) < CONFIG.cooldown) {
+    if (cooldown.has(key) && nowTs - cooldown.get(key) < CONFIG.cooldown) {
         return;
     }
 
-    cooldown.set(key, now);
+    cooldown.set(key, nowTs);
 
     let trigger = false;
     let content = message.content.trim();
@@ -186,7 +200,6 @@ client.on("messageCreate", async (message) => {
 
     try {
 
-        // 🔴 BLOQUEO DE OPINIONES
         if (
             message.channel.id === RESTRICTED_CHANNEL_ID &&
             isOpinionRequest(content)
@@ -199,15 +212,35 @@ client.on("messageCreate", async (message) => {
         const userId = message.author.id;
         const channelId = message.channel.id;
 
-        let history = getMemory(userId, channelId);
-
-        // 🔥 SANITIZAR SIEMPRE
-        history = sanitizeHistory(history);
+        let history = sanitizeHistory(getMemory(userId, channelId));
 
         const isRestrictedChannel = channelId === RESTRICTED_CHANNEL_ID;
 
         if (!isRestrictedChannel && (message.reference || isOpinionRequest(content))) {
             history = await injectContextAsHistory(history, message);
+        }
+
+        // ===== 🕒 FECHA =====
+        const now = new Date();
+        const currentDate = now.toLocaleDateString("es-ES", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric"
+        });
+
+        content = `Hoy es ${currentDate}.\n\n${content}`;
+
+        // ===== 📰 NOTICIAS REALES =====
+        if (isNewsRequest(content)) {
+
+            const news = await fetchNews(content);
+
+            if (news) {
+                content += `\n\nNoticias recientes:\n${news}\n\nResume estas noticias de forma clara.`;
+            } else {
+                content += "\n\nResponde con información lo más actual posible.";
+            }
         }
 
         const imageParts = await getImageParts(message);
@@ -220,19 +253,10 @@ client.on("messageCreate", async (message) => {
 
         contentParts.push(...imageParts);
 
-        console.log({
-            user: message.author.username,
-            content,
-            images: imageParts.length,
-            historyLength: history.length,
-            restricted: isRestrictedChannel
-        });
-
         let reply = await askGemini(history, contentParts);
 
         reply = cleanResponse(reply);
 
-        // ===== GUARDAR MEMORIA =====
         if (shouldStoreMessage(content) && shouldStoreMessage(reply)) {
 
             history.push(
@@ -240,14 +264,9 @@ client.on("messageCreate", async (message) => {
                 { role: "model", parts: [{ text: reply }] }
             );
 
-            // 🔥 RECORTE SEGURO
             if (history.length > CONFIG.maxHistory) {
                 history = history.slice(-CONFIG.maxHistory);
-
-                // asegurar inicio correcto
-                if (history[0]?.role === "model") {
-                    history.shift();
-                }
+                if (history[0]?.role === "model") history.shift();
             }
 
             saveMemory(userId, channelId, history);
