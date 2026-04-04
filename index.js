@@ -24,7 +24,6 @@ const CONFIG = {
 
 const cooldown = new Map();
 
-// 🔴 canal restringido
 const RESTRICTED_CHANNEL_ID = "1263597369677582492";
 
 // ===== DETECCIÓN =====
@@ -54,6 +53,37 @@ function shouldStoreMessage(text) {
     if (/^(hola|ok|vale|gracias)$/i.test(text)) return false;
 
     return true;
+}
+
+// 🔥 LIMPIEZA DE HISTORIAL (ANTI-BUG)
+function sanitizeHistory(history) {
+
+    if (!Array.isArray(history)) return [];
+
+    // quitar basura
+    let clean = history.filter(m =>
+        m &&
+        (m.role === "user" || m.role === "model") &&
+        Array.isArray(m.parts)
+    );
+
+    // asegurar alternancia básica (opcional pero robusto)
+    let fixed = [];
+    let lastRole = null;
+
+    for (const msg of clean) {
+        if (msg.role !== lastRole) {
+            fixed.push(msg);
+            lastRole = msg.role;
+        }
+    }
+
+    // 🔴 asegurar que empieza por user
+    while (fixed.length && fixed[0].role !== "user") {
+        fixed.shift();
+    }
+
+    return fixed;
 }
 
 // ===== CONTEXTO =====
@@ -131,19 +161,16 @@ client.on("messageCreate", async (message) => {
     let trigger = false;
     let content = message.content.trim();
 
-    // mención
     if (message.mentions.has(client.user)) {
         trigger = true;
         content = content.replace(/<@!?[0-9]+>/, "").trim();
     }
 
-    // gemini inicio
     if (startsWithGemini(content)) {
         trigger = true;
         content = content.replace(/^gemini[\s:,.!?-]*/i, "").trim();
     }
 
-    // respuesta al bot
     if (message.reference) {
         try {
             const replied = await message.channel.messages.fetch(message.reference.messageId);
@@ -174,14 +201,15 @@ client.on("messageCreate", async (message) => {
 
         let history = getMemory(userId, channelId);
 
-        // 🔴 NO USAR CONTEXTO EN ESTE CANAL
+        // 🔥 SANITIZAR SIEMPRE
+        history = sanitizeHistory(history);
+
         const isRestrictedChannel = channelId === RESTRICTED_CHANNEL_ID;
 
         if (!isRestrictedChannel && (message.reference || isOpinionRequest(content))) {
             history = await injectContextAsHistory(history, message);
         }
 
-        // 🖼️ imagen
         const imageParts = await getImageParts(message);
 
         const contentParts = [];
@@ -204,7 +232,7 @@ client.on("messageCreate", async (message) => {
 
         reply = cleanResponse(reply);
 
-        // guardar memoria (esto sí se mantiene)
+        // ===== GUARDAR MEMORIA =====
         if (shouldStoreMessage(content) && shouldStoreMessage(reply)) {
 
             history.push(
@@ -212,8 +240,14 @@ client.on("messageCreate", async (message) => {
                 { role: "model", parts: [{ text: reply }] }
             );
 
+            // 🔥 RECORTE SEGURO
             if (history.length > CONFIG.maxHistory) {
                 history = history.slice(-CONFIG.maxHistory);
+
+                // asegurar inicio correcto
+                if (history[0]?.role === "model") {
+                    history.shift();
+                }
             }
 
             saveMemory(userId, channelId, history);

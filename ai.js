@@ -9,15 +9,34 @@ const models = [
     "gemini-2.5-flash"
 ];
 
+// 🔥 ARREGLA EL HISTORIAL
+function normalizeHistory(history) {
+
+    if (!Array.isArray(history)) return [];
+
+    // eliminar elementos inválidos
+    let clean = history.filter(m =>
+        m &&
+        (m.role === "user" || m.role === "model") &&
+        Array.isArray(m.parts)
+    );
+
+    // 🔴 CLAVE: asegurar que empieza por "user"
+    while (clean.length && clean[0].role !== "user") {
+        clean.shift();
+    }
+
+    return clean;
+}
+
 async function tryModel(modelName, history, contentParts) {
 
     const model = genAI.getGenerativeModel({ model: modelName });
 
     const chat = model.startChat({
-        history: Array.isArray(history) ? history : []
+        history: normalizeHistory(history)
     });
 
-    // ✅ FORMA CORRECTA
     const result = await chat.sendMessage(contentParts);
 
     return result.response.text();
