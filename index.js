@@ -30,7 +30,6 @@ const CONFIG = {
 };
 
 const cooldown = new Map();
-
 const RESTRICTED_CHANNEL_ID = "1263597369677582492";
 
 // ===== DETECCIÓN =====
@@ -39,7 +38,7 @@ function startsWithGemini(text) {
 }
 
 function isOpinionRequest(text) {
-    return /(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón|quien tiene razon|quién gana|quien gana|qué es mejor|que es mejor|quién está equivocado|quien esta equivocado)/i.test(text);
+    return /(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón|quien tiene razon|quién gana|quien gana|qué es mejor|que es mejor|quién está equivocado)/i.test(text);
 }
 
 function isNewsRequest(text) {
@@ -50,14 +49,11 @@ function needsCurrentDate(text) {
     return /(hoy|fecha|día actual|que dia es|qué día es|ahora|actualmente)/i.test(text);
 }
 
-// 🧠 EXTRA: extraer tema
 function extractNewsTopic(text) {
-    const cleaned = text
+    return text
         .replace(/gemini/i, "")
         .replace(/noticias|últimas noticias|ultimas noticias|actualidad|qué ha pasado|que ha pasado/gi, "")
-        .trim();
-
-    return cleaned || "noticias generales";
+        .trim() || "general";
 }
 
 // ===== LIMPIEZA =====
@@ -96,50 +92,36 @@ function sanitizeHistory(history) {
     return clean;
 }
 
-// ===== CONTEXTO =====
-async function injectContextAsHistory(history, message) {
-
-    const fetched = await message.channel.messages.fetch({ limit: 15 });
-    const ordered = [...fetched.values()].reverse();
-
-    const filtered = ordered
-        .filter(m =>
-            !m.author.bot &&
-            m.content &&
-            m.content.length > 3 &&
-            !m.content.startsWith("http")
-        )
-        .slice(-CONFIG.contextMessages);
-
-    for (const msg of filtered) {
-        history.push({
-            role: "user",
-            parts: [{
-                text: `[Usuario: ${msg.author.username}] dice: ${msg.content}`
-            }]
-        });
-    }
-
-    return history;
-}
-
-// ===== 📰 NOTICIAS CON LINKS =====
+// ===== 📰 NOTICIAS REALES (CORREGIDO) =====
 async function fetchNews(topic) {
 
     const apiKey = process.env.NEWS_API_KEY;
     if (!apiKey) return null;
 
-    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(topic)}&language=es&sortBy=publishedAt&pageSize=5&apiKey=${apiKey}`;
+    const url = `https://newsapi.org/v2/top-headlines?q=${encodeURIComponent(topic)}&language=en&pageSize=10&apiKey=${apiKey}`;
 
     try {
         const res = await fetch(url);
         const data = await res.json();
 
-        if (!data.articles || data.articles.length === 0) return null;
+        if (!data.articles) return null;
 
-        return data.articles.map(a =>
-            `- ${a.title}\n  🔗 ${a.url}`
-        ).join("\n\n");
+        // 🔥 FILTRO: últimos 3 días
+        const now = Date.now();
+
+        const recentArticles = data.articles.filter(a => {
+            const published = new Date(a.publishedAt).getTime();
+            return (now - published) < (1000 * 60 * 60 * 24 * 3);
+        });
+
+        if (!recentArticles.length) return null;
+
+        return recentArticles.slice(0, 5).map(a => {
+            const date = new Date(a.publishedAt).toLocaleDateString("es-ES");
+            return `- ${a.title}
+  📰 ${a.source.name} | ${date}
+  🔗 ${a.url}`;
+        }).join("\n\n");
 
     } catch (err) {
         console.error("Error fetching news:", err);
@@ -270,7 +252,7 @@ client.on("messageCreate", async (message) => {
             content = `Hoy es ${currentDate}.\n\n${content}`;
         }
 
-        // ===== 📰 NOTICIAS REALES (FORZADAS) =====
+        // ===== 📰 NOTICIAS =====
         if (isNewsRequest(content)) {
 
             const topic = extractNewsTopic(content);
@@ -287,10 +269,9 @@ INSTRUCCIONES:
 - Usa SOLO la información proporcionada
 - NO inventes nada
 - NO hagas escenarios hipotéticos
-- Mantén un tono claro y natural
 `;
             } else {
-                content += "\n\nNo se han encontrado noticias recientes fiables.";
+                content = "No se han encontrado noticias recientes fiables sobre ese tema.";
             }
         }
 
