@@ -31,7 +31,7 @@ const CONFIG = {
 const cooldown = new Map();
 const RESTRICTED_CHANNEL_ID = "1263597369677582492";
 
-// ===== FUENTES PRIORITARIAS =====
+// ===== FUENTES FIABLES =====
 const TRUSTED_SOURCES = [
     "bbc", "reuters", "ap", "associated press", "the guardian",
     "nytimes", "washington post", "elpais", "le monde", "dw"
@@ -46,19 +46,44 @@ function isOpinionRequest(text) {
     return /(qué opinas|qué piensas|quién tiene razón|quién gana)/i.test(text);
 }
 
+// 🧠 DETECCIÓN INTELIGENTE DE NOTICIAS
 function isNewsRequest(text) {
-    return /(noticias|últimas noticias|actualidad|qué ha pasado)/i.test(text);
+
+    const t = text.toLowerCase();
+
+    if (/(noticias|actualidad|últimas noticias)/.test(t)) return true;
+
+    if (/(qué está pasando|que está pasando|qué pasa con|que pasa con)/.test(t)) return true;
+
+    if (/(novedades|último|reciente|recientes)/.test(t)) return true;
+
+    if (/(hay algo nuevo|alguna novedad|qué se sabe)/.test(t)) return true;
+
+    if (/(situación actual|cómo va|como va)/.test(t)) return true;
+
+    return false;
 }
 
 function needsCurrentDate(text) {
     return /(hoy|fecha|día actual)/i.test(text);
 }
 
+// 🧠 EXTRACTOR LIMPIO DE TEMA
 function extractNewsTopic(text) {
-    return text
-        .replace(/gemini/i, "")
-        .replace(/noticias|últimas noticias|actualidad|qué ha pasado/gi, "")
-        .trim() || "world";
+
+    let cleaned = text.toLowerCase();
+
+    cleaned = cleaned.replace(/gemini[\s:,.!?-]*/i, "");
+
+    cleaned = cleaned.replace(/(noticias|últimas noticias|actualidad|qué ha pasado|dame|las|últimas|sobre)/gi, "");
+
+    cleaned = cleaned.replace(/\b(de|del|la|el|los|las|un|una|sobre|acerca)\b/gi, "");
+
+    cleaned = cleaned.trim();
+
+    if (!cleaned || cleaned.length < 3) return "world";
+
+    return cleaned;
 }
 
 // ===== LIMPIEZA =====
@@ -69,7 +94,7 @@ function cleanResponse(text) {
         ?.trim();
 }
 
-// ===== SANITIZE =====
+// ===== HISTORIAL =====
 function sanitizeHistory(history) {
     if (!Array.isArray(history)) return [];
 
@@ -86,7 +111,7 @@ function sanitizeHistory(history) {
     return clean;
 }
 
-// ===== UTILIDADES =====
+// ===== UTIL =====
 function normalizeTitle(title) {
     return title.toLowerCase().replace(/[^\w\s]/g, "").trim();
 }
@@ -97,9 +122,8 @@ function isTrusted(source) {
     );
 }
 
-// ===== 📰 GNEWS =====
+// ===== GNEWS =====
 async function fetchGNews(topic) {
-
     try {
         const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(topic)}&lang=en&max=10&apikey=${process.env.GNEWS_API_KEY}`;
         const res = await fetch(url);
@@ -117,9 +141,8 @@ async function fetchGNews(topic) {
     }
 }
 
-// ===== 📰 NEWSAPI =====
+// ===== NEWSAPI =====
 async function fetchNewsAPI(topic) {
-
     try {
         const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(topic)}&language=en&sortBy=publishedAt&pageSize=10&apiKey=${process.env.NEWS_API_KEY}`;
         const res = await fetch(url);
@@ -137,7 +160,7 @@ async function fetchNewsAPI(topic) {
     }
 }
 
-// ===== 🧠 AGREGADOR =====
+// ===== AGREGADOR =====
 async function fetchNews(topic) {
 
     const gnews = await fetchGNews(topic);
@@ -145,7 +168,7 @@ async function fetchNews(topic) {
 
     let combined = [...gnews, ...newsapi];
 
-    // 🚫 eliminar duplicados
+    // quitar duplicados
     const seen = new Set();
     combined = combined.filter(a => {
         const norm = normalizeTitle(a.title);
@@ -154,18 +177,16 @@ async function fetchNews(topic) {
         return true;
     });
 
-    // ⭐ priorizar fuentes fiables
-    combined.sort((a, b) => {
-        return (isTrusted(b.source) - isTrusted(a.source));
-    });
+    // priorizar fuentes fiables
+    combined.sort((a, b) => (isTrusted(b.source) - isTrusted(a.source)));
 
-    // 📅 ordenar por fecha
+    // ordenar por fecha
     combined.sort((a, b) => new Date(b.date) - new Date(a.date));
 
     return combined.slice(0, 5);
 }
 
-// ===== 🌍 TRADUCCIÓN =====
+// ===== TRADUCCIÓN =====
 async function translateToSpanish(text) {
     try {
         return await askGemini([], [{ text: `Traduce al español:\n\n${text}` }]);
@@ -174,7 +195,7 @@ async function translateToSpanish(text) {
     }
 }
 
-// ===== SLASH COMMANDS =====
+// ===== SLASH =====
 client.on("interactionCreate", async (interaction) => {
 
     if (!interaction.isChatInputCommand()) return;
@@ -261,7 +282,7 @@ client.on("messageCreate", async (message) => {
             content = `Hoy es ${nowDate}.\n\n${content}`;
         }
 
-        // ===== 📰 NOTICIAS =====
+        // ===== NOTICIAS =====
         if (isNewsRequest(content)) {
 
             const topic = extractNewsTopic(content);
