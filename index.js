@@ -138,17 +138,11 @@ Mensaje: "${text}"
 async function fetchGNews(topic) {
     const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(topic)}&lang=en&max=5&apikey=${process.env.GNEWS_API_KEY}`;
 
-    console.log("🌍 GNews URL:", url);
-
     try {
         const res = await fetch(url);
         const data = await res.json();
-
-        if (!data.articles) return [];
-        return data.articles;
-
-    } catch (err) {
-        console.error("❌ GNews error:", err);
+        return data.articles || [];
+    } catch {
         return [];
     }
 }
@@ -157,17 +151,11 @@ async function fetchGNews(topic) {
 async function fetchNewsAPI(topic) {
     const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(topic)}&language=en&sortBy=publishedAt&pageSize=5&apiKey=${process.env.NEWS_API_KEY}`;
 
-    console.log("🌍 NewsAPI URL:", url);
-
     try {
         const res = await fetch(url);
         const data = await res.json();
-
-        if (!data.articles) return [];
-        return data.articles;
-
-    } catch (err) {
-        console.error("❌ NewsAPI error:", err);
+        return data.articles || [];
+    } catch {
         return [];
     }
 }
@@ -190,9 +178,7 @@ async function fetchNews(topic) {
     });
 
     // ordenar por fecha
-    combined.sort((a, b) => {
-        return new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0);
-    });
+    combined.sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
 
     // priorizar fuentes fiables
     combined.sort((a, b) => isTrusted(b) - isTrusted(a));
@@ -200,12 +186,30 @@ async function fetchNews(topic) {
     return combined.slice(0, 5);
 }
 
-// ===== TRADUCCIÓN =====
-async function translateToSpanish(text) {
+// ===== 🧠 RESUMEN DE NOTICIAS =====
+async function summarizeNews(articles, topic) {
+
+    const newsText = articles.map(a =>
+        `- ${a.title} (${getSourceName(a)})`
+    ).join("\n");
+
+    const prompt = `
+Resume estas noticias en español en 3-5 puntos clave.
+
+NO expliques.
+NO des opciones.
+NO hables de traducción.
+
+Tema: ${topic}
+
+Titulares:
+${newsText}
+`;
+
     try {
-        return await askGemini([], [{ text: `Traduce al español:\n${text}` }]);
+        return await askGemini([], [{ text: prompt }]);
     } catch {
-        return text;
+        return "📰 No he podido resumir las noticias.";
     }
 }
 
@@ -306,21 +310,14 @@ client.on("messageCreate", async (message) => {
                 return message.reply(`📰 No he encontrado noticias sobre "${topic}".`);
             }
 
-            const translated = await Promise.all(
-                articles.map(a => translateToSpanish(a.title))
-            );
+            const summary = await summarizeNews(articles, topic);
 
-            const formatted = articles.map((a, i) => {
-
+            const links = articles.map(a => {
                 const source = getSourceName(a);
-                const date = new Date(a.publishedAt).toLocaleDateString("es-ES");
+                return `🔗 ${source}: ${a.url}`;
+            }).join("\n");
 
-                return `**${i + 1}. ${translated[i]}**
-📰 ${source} | ${date}
-🔗 ${a.url}`;
-            }).join("\n\n");
-
-            return message.reply(`📰 Últimas noticias sobre **${topic}**:\n\n${formatted}`);
+            return message.reply(`📰 **Noticias sobre ${topic}:**\n\n${summary}\n\n${links}`);
         }
 
         // ===== FECHA =====
