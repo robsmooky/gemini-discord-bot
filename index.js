@@ -50,6 +50,24 @@ function needsCurrentDate(text) {
     return /(hoy|fecha|día actual)/i.test(text);
 }
 
+// 🚀 FILTRO RÁPIDO (SIN IA)
+function maybeNews(text) {
+
+    const t = text.toLowerCase();
+
+    return (
+        t.includes("noticias") ||
+        t.includes("actualidad") ||
+        t.includes("novedad") ||
+        t.includes("reciente") ||
+        t.includes("qué pasa") ||
+        t.includes("que pasa") ||
+        t.includes("qué está pasando") ||
+        t.includes("como va") ||
+        t.includes("último")
+    );
+}
+
 // ===== LIMPIEZA =====
 function cleanResponse(text) {
     return text
@@ -264,12 +282,19 @@ client.on("messageCreate", async (message) => {
 
         let history = sanitizeHistory(getMemory(userId, channelId));
 
-        // 🧠 DETECCIÓN IA
-        const intent = await detectNewsIntent(content);
+        // ===== 📰 DETECCIÓN OPTIMIZADA =====
+        let isNews = false;
+        let topic = "";
 
-        if (intent.isNews) {
+        if (maybeNews(content)) {
+            const intent = await detectNewsIntent(content);
+            isNews = intent.isNews;
+            topic = intent.topic;
+        }
 
-            const topic = intent.topic || "world";
+        if (isNews) {
+
+            topic = topic || "world";
 
             console.log("🧠 Tema IA:", topic);
 
