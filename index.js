@@ -1,7 +1,7 @@
+require("dotenv").config();
+
 console.log("GNEWS_API_KEY:", process.env.GNEWS_API_KEY ? "OK" : "MISSING");
 console.log("NEWS_API_KEY:", process.env.NEWS_API_KEY ? "OK" : "MISSING");
-
-require("dotenv").config();
 
 const { Client, GatewayIntentBits, PermissionsBitField } = require("discord.js");
 const fetch = require("node-fetch");
@@ -37,7 +37,8 @@ const RESTRICTED_CHANNEL_ID = "1263597369677582492";
 // ===== FUENTES FIABLES =====
 const TRUSTED_SOURCES = [
     "bbc", "reuters", "ap", "associated press", "the guardian",
-    "nytimes", "washington post", "elpais", "le monde", "dw"
+    "nytimes", "washington post", "elpais", "le monde", "dw",
+    "the verge", "ign", "polygon", "nintendolife", "eurogamer"
 ];
 
 // ===== DETECCIÓN =====
@@ -53,20 +54,13 @@ function needsCurrentDate(text) {
     return /(hoy|fecha|día actual)/i.test(text);
 }
 
-// 🚀 FILTRO RÁPIDO (SIN IA)
 function maybeNews(text) {
-
     const t = text.toLowerCase();
-
     return (
         t.includes("noticias") ||
         t.includes("actualidad") ||
         t.includes("novedad") ||
         t.includes("reciente") ||
-        t.includes("qué pasa") ||
-        t.includes("que pasa") ||
-        t.includes("qué está pasando") ||
-        t.includes("como va") ||
         t.includes("último")
     );
 }
@@ -98,35 +92,38 @@ function sanitizeHistory(history) {
 
 // ===== UTIL =====
 function normalizeTitle(title) {
-    return title.toLowerCase().replace(/[^\w\s]/g, "").trim();
+    return title?.toLowerCase().replace(/[^\w\s]/g, "").trim();
 }
 
-function isTrusted(source) {
-    return TRUSTED_SOURCES.some(s =>
-        source.toLowerCase().includes(s)
-    );
+function getSourceName(article) {
+    if (!article.source) return "Desconocido";
+    if (typeof article.source === "string") return article.source;
+    return article.source.name || "Desconocido";
+}
+
+function isTrusted(article) {
+    const source = getSourceName(article).toLowerCase();
+    return TRUSTED_SOURCES.some(s => source.includes(s));
 }
 
 // ===== 🧠 DETECCIÓN IA =====
 async function detectNewsIntent(text) {
 
     const prompt = `
-Analiza esta petición:
+Responde SOLO JSON:
 
-"${text}"
-
-Responde SOLO en JSON:
 {
-  "isNews": true o false,
-  "topic": "tema limpio"
+ "isNews": true o false,
+ "topic": "tema"
 }
+
+Mensaje: "${text}"
 `;
 
     try {
         const response = await askGemini([], [{ text: prompt }]);
 
         const jsonMatch = response.match(/\{[\s\S]*\}/);
-
         if (!jsonMatch) return { isNews: false, topic: "" };
 
         return JSON.parse(jsonMatch[0]);
@@ -139,7 +136,6 @@ Responde SOLO en JSON:
 
 // ===== GNEWS =====
 async function fetchGNews(topic) {
-
     const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(topic)}&lang=en&max=5&apikey=${process.env.GNEWS_API_KEY}`;
 
     console.log("🌍 GNews URL:", url);
@@ -148,10 +144,7 @@ async function fetchGNews(topic) {
         const res = await fetch(url);
         const data = await res.json();
 
-        console.log("📰 GNews response:", data);
-
         if (!data.articles) return [];
-
         return data.articles;
 
     } catch (err) {
@@ -162,7 +155,6 @@ async function fetchGNews(topic) {
 
 // ===== NEWSAPI =====
 async function fetchNewsAPI(topic) {
-
     const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(topic)}&language=en&sortBy=publishedAt&pageSize=5&apiKey=${process.env.NEWS_API_KEY}`;
 
     console.log("🌍 NewsAPI URL:", url);
@@ -171,10 +163,7 @@ async function fetchNewsAPI(topic) {
         const res = await fetch(url);
         const data = await res.json();
 
-        console.log("📰 NewsAPI response:", data);
-
         if (!data.articles) return [];
-
         return data.articles;
 
     } catch (err) {
@@ -195,16 +184,18 @@ async function fetchNews(topic) {
     const seen = new Set();
     combined = combined.filter(a => {
         const norm = normalizeTitle(a.title);
-        if (seen.has(norm)) return false;
+        if (!norm || seen.has(norm)) return false;
         seen.add(norm);
         return true;
     });
 
-    // priorizar fuentes fiables
-    combined.sort((a, b) => (isTrusted(b.source) - isTrusted(a.source)));
-
     // ordenar por fecha
-    combined.sort((a, b) => new Date(b.date) - new Date(a.date));
+    combined.sort((a, b) => {
+        return new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0);
+    });
+
+    // priorizar fuentes fiables
+    combined.sort((a, b) => isTrusted(b) - isTrusted(a));
 
     return combined.slice(0, 5);
 }
@@ -212,7 +203,7 @@ async function fetchNews(topic) {
 // ===== TRADUCCIÓN =====
 async function translateToSpanish(text) {
     try {
-        return await askGemini([], [{ text: `Traduce al español:\n\n${text}` }]);
+        return await askGemini([], [{ text: `Traduce al español:\n${text}` }]);
     } catch {
         return text;
     }
@@ -241,12 +232,12 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.commandName === "memory") {
         const summary = getMemorySummary(userId, channelId);
-        return interaction.reply({ content: summary, ephemeral: true });
+        return interaction.reply({ content: summary || "Sin memoria.", ephemeral: true });
     }
 });
 
 // ===== READY =====
-client.on("ready", () => {
+client.once("clientReady", () => {
     console.log(`✅ Bot conectado como ${client.user.tag}`);
 });
 
@@ -293,7 +284,7 @@ client.on("messageCreate", async (message) => {
 
         let history = sanitizeHistory(getMemory(userId, channelId));
 
-        // ===== 📰 DETECCIÓN OPTIMIZADA =====
+        // ===== NOTICIAS =====
         let isNews = false;
         let topic = "";
 
@@ -320,17 +311,19 @@ client.on("messageCreate", async (message) => {
             );
 
             const formatted = articles.map((a, i) => {
-                const date = new Date(a.date).toLocaleDateString("es-ES");
+
+                const source = getSourceName(a);
+                const date = new Date(a.publishedAt).toLocaleDateString("es-ES");
 
                 return `**${i + 1}. ${translated[i]}**
-📰 ${a.source} | ${date}
+📰 ${source} | ${date}
 🔗 ${a.url}`;
             }).join("\n\n");
 
             return message.reply(`📰 Últimas noticias sobre **${topic}**:\n\n${formatted}`);
         }
 
-        // 🕒 fecha solo si toca
+        // ===== FECHA =====
         if (needsCurrentDate(content)) {
             const nowDate = new Date().toLocaleDateString("es-ES", {
                 weekday: "long",
