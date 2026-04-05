@@ -46,44 +46,8 @@ function isOpinionRequest(text) {
     return /(qué opinas|qué piensas|quién tiene razón|quién gana)/i.test(text);
 }
 
-// 🧠 DETECCIÓN INTELIGENTE DE NOTICIAS
-function isNewsRequest(text) {
-
-    const t = text.toLowerCase();
-
-    if (/(noticias|actualidad|últimas noticias)/.test(t)) return true;
-
-    if (/(qué está pasando|que está pasando|qué pasa con|que pasa con)/.test(t)) return true;
-
-    if (/(novedades|último|reciente|recientes)/.test(t)) return true;
-
-    if (/(hay algo nuevo|alguna novedad|qué se sabe)/.test(t)) return true;
-
-    if (/(situación actual|cómo va|como va)/.test(t)) return true;
-
-    return false;
-}
-
 function needsCurrentDate(text) {
     return /(hoy|fecha|día actual)/i.test(text);
-}
-
-// 🧠 EXTRACTOR LIMPIO DE TEMA
-function extractNewsTopic(text) {
-
-    let cleaned = text.toLowerCase();
-
-    cleaned = cleaned.replace(/gemini[\s:,.!?-]*/i, "");
-
-    cleaned = cleaned.replace(/(noticias|últimas noticias|actualidad|qué ha pasado|dame|las|últimas|sobre)/gi, "");
-
-    cleaned = cleaned.replace(/\b(de|del|la|el|los|las|un|una|sobre|acerca)\b/gi, "");
-
-    cleaned = cleaned.trim();
-
-    if (!cleaned || cleaned.length < 3) return "world";
-
-    return cleaned;
 }
 
 // ===== LIMPIEZA =====
@@ -120,6 +84,36 @@ function isTrusted(source) {
     return TRUSTED_SOURCES.some(s =>
         source.toLowerCase().includes(s)
     );
+}
+
+// ===== 🧠 DETECCIÓN IA =====
+async function detectNewsIntent(text) {
+
+    const prompt = `
+Analiza esta petición:
+
+"${text}"
+
+Responde SOLO en JSON:
+{
+  "isNews": true o false,
+  "topic": "tema limpio"
+}
+`;
+
+    try {
+        const response = await askGemini([], [{ text: prompt }]);
+
+        const jsonMatch = response.match(/\{[\s\S]*\}/);
+
+        if (!jsonMatch) return { isNews: false, topic: "" };
+
+        return JSON.parse(jsonMatch[0]);
+
+    } catch (err) {
+        console.error("detectNewsIntent error:", err);
+        return { isNews: false, topic: "" };
+    }
 }
 
 // ===== GNEWS =====
@@ -270,26 +264,19 @@ client.on("messageCreate", async (message) => {
 
         let history = sanitizeHistory(getMemory(userId, channelId));
 
-        // 🕒 fecha solo si toca
-        if (needsCurrentDate(content) && !isNewsRequest(content)) {
-            const nowDate = new Date().toLocaleDateString("es-ES", {
-                weekday: "long",
-                year: "numeric",
-                month: "long",
-                day: "numeric"
-            });
+        // 🧠 DETECCIÓN IA
+        const intent = await detectNewsIntent(content);
 
-            content = `Hoy es ${nowDate}.\n\n${content}`;
-        }
+        if (intent.isNews) {
 
-        // ===== NOTICIAS =====
-        if (isNewsRequest(content)) {
+            const topic = intent.topic || "world";
 
-            const topic = extractNewsTopic(content);
+            console.log("🧠 Tema IA:", topic);
+
             const articles = await fetchNews(topic);
 
             if (!articles.length) {
-                return message.reply(`📰 No he encontrado noticias recientes sobre "${topic}".`);
+                return message.reply(`📰 No he encontrado noticias sobre "${topic}".`);
             }
 
             const translated = await Promise.all(
@@ -305,6 +292,18 @@ client.on("messageCreate", async (message) => {
             }).join("\n\n");
 
             return message.reply(`📰 Últimas noticias sobre **${topic}**:\n\n${formatted}`);
+        }
+
+        // 🕒 fecha solo si toca
+        if (needsCurrentDate(content)) {
+            const nowDate = new Date().toLocaleDateString("es-ES", {
+                weekday: "long",
+                year: "numeric",
+                month: "long",
+                day: "numeric"
+            });
+
+            content = `Hoy es ${nowDate}.\n\n${content}`;
         }
 
         // ===== NORMAL =====
