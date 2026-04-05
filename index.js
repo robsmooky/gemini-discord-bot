@@ -43,7 +43,22 @@ function isOpinionRequest(text) {
 }
 
 function isNewsRequest(text) {
-    return /(noticias|últimas noticias|ultimas noticias|reciente|recientes|actualidad|hoy|esta semana)/i.test(text);
+    return /(noticias|últimas noticias|ultimas noticias|actualidad|qué ha pasado|que ha pasado)/i.test(text);
+}
+
+// 🧠 NUEVO: detectar si necesita fecha
+function needsCurrentDate(text) {
+    return /(hoy|fecha|día actual|que dia es|qué día es|ahora|actualmente)/i.test(text);
+}
+
+// 🧠 EXTRA: extraer tema de noticias
+function extractNewsTopic(text) {
+    const cleaned = text
+        .replace(/gemini/i, "")
+        .replace(/noticias|últimas noticias|ultimas noticias|actualidad|qué ha pasado|que ha pasado/gi, "")
+        .trim();
+
+    return cleaned || "noticias generales";
 }
 
 // ===== LIMPIEZA =====
@@ -110,19 +125,19 @@ async function injectContextAsHistory(history, message) {
     return history;
 }
 
-// ===== NOTICIAS =====
-async function fetchNews(query = "videojuegos") {
+// ===== 📰 NOTICIAS DINÁMICAS =====
+async function fetchNews(topic) {
 
     const apiKey = process.env.NEWS_API_KEY;
     if (!apiKey) return null;
 
-    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&language=es&sortBy=publishedAt&pageSize=5&apiKey=${apiKey}`;
+    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(topic)}&language=es&sortBy=publishedAt&pageSize=5&apiKey=${apiKey}`;
 
     try {
         const res = await fetch(url);
         const data = await res.json();
 
-        if (!data.articles) return null;
+        if (!data.articles || data.articles.length === 0) return null;
 
         return data.articles.map(a => `- ${a.title}`).join("\n");
 
@@ -267,7 +282,7 @@ client.on("messageCreate", async (message) => {
             history = await injectContextAsHistory(history, message);
         }
 
-        // ===== FECHA =====
+        // ===== 🕒 FECHA SOLO CUANDO TOCA =====
         const now = new Date();
         const currentDate = now.toLocaleDateString("es-ES", {
             weekday: "long",
@@ -276,14 +291,20 @@ client.on("messageCreate", async (message) => {
             day: "numeric"
         });
 
-        content = `Hoy es ${currentDate}.\n\n${content}`;
+        if (needsCurrentDate(content) || isNewsRequest(content)) {
+            content = `Hoy es ${currentDate}.\n\n${content}`;
+        }
 
-        // ===== NOTICIAS =====
+        // ===== 📰 NOTICIAS INTELIGENTES =====
         if (isNewsRequest(content)) {
-            const news = await fetchNews(content);
+
+            const topic = extractNewsTopic(content);
+            const news = await fetchNews(topic);
 
             if (news) {
-                content += `\n\nNoticias recientes:\n${news}\n\nResume estas noticias.`;
+                content += `\n\nNoticias recientes sobre "${topic}":\n${news}\n\nResume estas noticias de forma clara y natural.`;
+            } else {
+                content += "\n\nResponde con información lo más actual posible.";
             }
         }
 
