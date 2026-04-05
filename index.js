@@ -46,12 +46,11 @@ function isNewsRequest(text) {
     return /(noticias|últimas noticias|ultimas noticias|actualidad|qué ha pasado|que ha pasado)/i.test(text);
 }
 
-// 🧠 NUEVO: detectar si necesita fecha
 function needsCurrentDate(text) {
     return /(hoy|fecha|día actual|que dia es|qué día es|ahora|actualmente)/i.test(text);
 }
 
-// 🧠 EXTRA: extraer tema de noticias
+// 🧠 EXTRA: extraer tema
 function extractNewsTopic(text) {
     const cleaned = text
         .replace(/gemini/i, "")
@@ -68,7 +67,6 @@ function cleanResponse(text) {
     return text
         .replace(/como modelo de ia[^.]*\./gi, "")
         .replace(/como ia[^.]*\./gi, "")
-        .replace(/^["']|["']$/g, "")
         .trim();
 }
 
@@ -125,7 +123,7 @@ async function injectContextAsHistory(history, message) {
     return history;
 }
 
-// ===== 📰 NOTICIAS DINÁMICAS =====
+// ===== 📰 NOTICIAS CON LINKS =====
 async function fetchNews(topic) {
 
     const apiKey = process.env.NEWS_API_KEY;
@@ -139,7 +137,9 @@ async function fetchNews(topic) {
 
         if (!data.articles || data.articles.length === 0) return null;
 
-        return data.articles.map(a => `- ${a.title}`).join("\n");
+        return data.articles.map(a =>
+            `- ${a.title}\n  🔗 ${a.url}`
+        ).join("\n\n");
 
     } catch (err) {
         console.error("Error fetching news:", err);
@@ -182,36 +182,22 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.commandName === "reset") {
         clearMemory(userId, channelId);
-        return interaction.reply({
-            content: "🧠 Memoria reiniciada en este canal.",
-            ephemeral: true
-        });
+        return interaction.reply({ content: "🧠 Memoria reiniciada.", ephemeral: true });
     }
 
     if (interaction.commandName === "resetall") {
 
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return interaction.reply({
-                content: "❌ Solo administradores pueden usar este comando.",
-                ephemeral: true
-            });
+            return interaction.reply({ content: "❌ Solo admins.", ephemeral: true });
         }
 
         clearAllMemory();
-
-        return interaction.reply({
-            content: "🔥 Toda la memoria del bot ha sido borrada.",
-            ephemeral: true
-        });
+        return interaction.reply({ content: "🔥 Memoria global borrada.", ephemeral: true });
     }
 
     if (interaction.commandName === "memory") {
         const summary = getMemorySummary(userId, channelId);
-
-        return interaction.reply({
-            content: `🧠 Últimos recuerdos:\n\n${summary}`,
-            ephemeral: true
-        });
+        return interaction.reply({ content: summary, ephemeral: true });
     }
 });
 
@@ -228,10 +214,7 @@ client.on("messageCreate", async (message) => {
     const key = `${message.author.id}-${message.channel.id}`;
     const nowTs = Date.now();
 
-    if (cooldown.has(key) && nowTs - cooldown.get(key) < CONFIG.cooldown) {
-        return;
-    }
-
+    if (cooldown.has(key) && nowTs - cooldown.get(key) < CONFIG.cooldown) return;
     cooldown.set(key, nowTs);
 
     let trigger = false;
@@ -250,14 +233,11 @@ client.on("messageCreate", async (message) => {
     if (message.reference) {
         try {
             const replied = await message.channel.messages.fetch(message.reference.messageId);
-            if (replied.author.id === client.user.id) {
-                trigger = true;
-            }
+            if (replied.author.id === client.user.id) trigger = true;
         } catch {}
     }
 
     if (!trigger) return;
-
     if (!content) content = "Describe esta imagen";
 
     try {
@@ -276,47 +256,51 @@ client.on("messageCreate", async (message) => {
 
         let history = sanitizeHistory(getMemory(userId, channelId));
 
-        const isRestrictedChannel = channelId === RESTRICTED_CHANNEL_ID;
+        // ===== 🕒 FECHA SOLO SI NO ES NOTICIA =====
+        if (needsCurrentDate(content) && !isNewsRequest(content)) {
 
-        if (!isRestrictedChannel && (message.reference || isOpinionRequest(content))) {
-            history = await injectContextAsHistory(history, message);
-        }
+            const now = new Date();
+            const currentDate = now.toLocaleDateString("es-ES", {
+                weekday: "long",
+                year: "numeric",
+                month: "long",
+                day: "numeric"
+            });
 
-        // ===== 🕒 FECHA SOLO CUANDO TOCA =====
-        const now = new Date();
-        const currentDate = now.toLocaleDateString("es-ES", {
-            weekday: "long",
-            year: "numeric",
-            month: "long",
-            day: "numeric"
-        });
-
-        if (needsCurrentDate(content) || isNewsRequest(content)) {
             content = `Hoy es ${currentDate}.\n\n${content}`;
         }
 
-        // ===== 📰 NOTICIAS INTELIGENTES =====
+        // ===== 📰 NOTICIAS REALES (FORZADAS) =====
         if (isNewsRequest(content)) {
 
             const topic = extractNewsTopic(content);
             const news = await fetchNews(topic);
 
             if (news) {
-                content += `\n\nNoticias recientes sobre "${topic}":\n${news}\n\nResume estas noticias de forma clara y natural.`;
+                content = `
+NOTICIAS REALES RECIENTES SOBRE "${topic}":
+
+${news}
+
+INSTRUCCIONES:
+- Resume estas noticias
+- Usa SOLO la información proporcionada
+- NO inventes nada
+- NO hagas escenarios hipotéticos
+- Mantén un tono claro y natural
+`;
             } else {
-                content += "\n\nResponde con información lo más actual posible.";
+                content += "\n\nNo se han encontrado noticias recientes fiables.";
             }
         }
 
         const imageParts = await getImageParts(message);
 
         const contentParts = [];
-
         if (content) contentParts.push({ text: content });
         contentParts.push(...imageParts);
 
         let reply = await askGemini(history, contentParts);
-
         reply = cleanResponse(reply);
 
         if (shouldStoreMessage(content) && shouldStoreMessage(reply)) {
@@ -337,11 +321,8 @@ client.on("messageCreate", async (message) => {
         const messages = splitMessage(reply);
 
         for (let i = 0; i < messages.length; i++) {
-            if (i === 0) {
-                await message.reply(messages[i]);
-            } else {
-                await message.channel.send(messages[i]);
-            }
+            if (i === 0) await message.reply(messages[i]);
+            else await message.channel.send(messages[i]);
         }
 
     } catch (err) {
