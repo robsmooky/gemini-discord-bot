@@ -25,12 +25,17 @@ const client = new Client({
 // ===== CONFIG =====
 const CONFIG = {
     cooldown: 3000,
-    maxHistory: 20,
-    contextMessages: 6
+    maxHistory: 20
 };
 
 const cooldown = new Map();
 const RESTRICTED_CHANNEL_ID = "1263597369677582492";
+
+// ===== FUENTES PRIORITARIAS =====
+const TRUSTED_SOURCES = [
+    "bbc", "reuters", "ap", "associated press", "the guardian",
+    "nytimes", "washington post", "elpais", "le monde", "dw"
+];
 
 // ===== DETECCIÓN =====
 function startsWithGemini(text) {
@@ -38,41 +43,30 @@ function startsWithGemini(text) {
 }
 
 function isOpinionRequest(text) {
-    return /(qué opinas|que opinas|qué piensas|que piensas|quién tiene razón|quien tiene razon|quién gana|quien gana|qué es mejor|que es mejor|quién está equivocado)/i.test(text);
+    return /(qué opinas|qué piensas|quién tiene razón|quién gana)/i.test(text);
 }
 
 function isNewsRequest(text) {
-    return /(noticias|últimas noticias|ultimas noticias|actualidad|qué ha pasado|que ha pasado)/i.test(text);
+    return /(noticias|últimas noticias|actualidad|qué ha pasado)/i.test(text);
 }
 
 function needsCurrentDate(text) {
-    return /(hoy|fecha|día actual|que dia es|qué día es|ahora|actualmente)/i.test(text);
+    return /(hoy|fecha|día actual)/i.test(text);
 }
 
 function extractNewsTopic(text) {
     return text
         .replace(/gemini/i, "")
-        .replace(/noticias|últimas noticias|ultimas noticias|actualidad|qué ha pasado|que ha pasado/gi, "")
-        .trim() || "general";
+        .replace(/noticias|últimas noticias|actualidad|qué ha pasado/gi, "")
+        .trim() || "world";
 }
 
 // ===== LIMPIEZA =====
 function cleanResponse(text) {
-    if (!text) return text;
-
     return text
-        .replace(/como modelo de ia[^.]*\./gi, "")
-        .replace(/como ia[^.]*\./gi, "")
-        .trim();
-}
-
-// ===== MEMORIA =====
-function shouldStoreMessage(text) {
-    if (!text) return false;
-    if (text.length < 5) return false;
-    if (/^(hola|ok|vale|gracias)$/i.test(text)) return false;
-
-    return true;
+        ?.replace(/como modelo de ia[^.]*\./gi, "")
+        ?.replace(/como ia[^.]*\./gi, "")
+        ?.trim();
 }
 
 // ===== SANITIZE =====
@@ -92,66 +86,92 @@ function sanitizeHistory(history) {
     return clean;
 }
 
-// ===== 📰 NOTICIAS REALES (CORREGIDO) =====
-async function fetchNews(topic) {
+// ===== UTILIDADES =====
+function normalizeTitle(title) {
+    return title.toLowerCase().replace(/[^\w\s]/g, "").trim();
+}
 
-    const apiKey = process.env.NEWS_API_KEY;
-    if (!apiKey) return null;
+function isTrusted(source) {
+    return TRUSTED_SOURCES.some(s =>
+        source.toLowerCase().includes(s)
+    );
+}
 
-    const url = `https://newsapi.org/v2/top-headlines?q=${encodeURIComponent(topic)}&language=en&pageSize=10&apiKey=${apiKey}`;
+// ===== 📰 GNEWS =====
+async function fetchGNews(topic) {
 
     try {
+        const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(topic)}&lang=en&max=10&apikey=${process.env.GNEWS_API_KEY}`;
         const res = await fetch(url);
         const data = await res.json();
 
-        if (!data.articles) return null;
+        return data.articles?.map(a => ({
+            title: a.title,
+            url: a.url,
+            source: a.source.name,
+            date: a.publishedAt
+        })) || [];
 
-        // 🔥 FILTRO: últimos 3 días
-        const now = Date.now();
-
-        const recentArticles = data.articles.filter(a => {
-            const published = new Date(a.publishedAt).getTime();
-            return (now - published) < (1000 * 60 * 60 * 24 * 3);
-        });
-
-        if (!recentArticles.length) return null;
-
-        return recentArticles.slice(0, 5).map(a => {
-            const date = new Date(a.publishedAt).toLocaleDateString("es-ES");
-            return `- ${a.title}
-  📰 ${a.source.name} | ${date}
-  🔗 ${a.url}`;
-        }).join("\n\n");
-
-    } catch (err) {
-        console.error("Error fetching news:", err);
-        return null;
+    } catch {
+        return [];
     }
 }
 
-// ===== IMÁGENES =====
-async function getImageParts(message) {
+// ===== 📰 NEWSAPI =====
+async function fetchNewsAPI(topic) {
 
-    if (!message.attachments.size) return [];
+    try {
+        const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(topic)}&language=en&sortBy=publishedAt&pageSize=10&apiKey=${process.env.NEWS_API_KEY}`;
+        const res = await fetch(url);
+        const data = await res.json();
 
-    const parts = [];
+        return data.articles?.map(a => ({
+            title: a.title,
+            url: a.url,
+            source: a.source.name,
+            date: a.publishedAt
+        })) || [];
 
-    for (const attachment of message.attachments.values()) {
-
-        if (!attachment.contentType?.startsWith("image/")) continue;
-
-        const res = await fetch(attachment.url);
-        const buffer = await res.arrayBuffer();
-
-        parts.push({
-            inlineData: {
-                data: Buffer.from(buffer).toString("base64"),
-                mimeType: attachment.contentType
-            }
-        });
+    } catch {
+        return [];
     }
+}
 
-    return parts;
+// ===== 🧠 AGREGADOR =====
+async function fetchNews(topic) {
+
+    const gnews = await fetchGNews(topic);
+    const newsapi = await fetchNewsAPI(topic);
+
+    let combined = [...gnews, ...newsapi];
+
+    // 🚫 eliminar duplicados
+    const seen = new Set();
+    combined = combined.filter(a => {
+        const norm = normalizeTitle(a.title);
+        if (seen.has(norm)) return false;
+        seen.add(norm);
+        return true;
+    });
+
+    // ⭐ priorizar fuentes fiables
+    combined.sort((a, b) => {
+        return (isTrusted(b.source) - isTrusted(a.source));
+    });
+
+    // 📅 ordenar por fecha
+    combined.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    return combined.slice(0, 5);
+}
+
+// ===== 🌍 TRADUCCIÓN =====
+async function translateToSpanish(text) {
+    try {
+        return await askGemini([], [{ text: `Traduce al español:\n\n${text}` }]);
+    } catch {
+        return text;
+    }
 }
 
 // ===== SLASH COMMANDS =====
@@ -168,13 +188,11 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "resetall") {
-
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
             return interaction.reply({ content: "❌ Solo admins.", ephemeral: true });
         }
-
         clearAllMemory();
-        return interaction.reply({ content: "🔥 Memoria global borrada.", ephemeral: true });
+        return interaction.reply({ content: "🔥 Memoria borrada.", ephemeral: true });
     }
 
     if (interaction.commandName === "memory") {
@@ -194,10 +212,10 @@ client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
 
     const key = `${message.author.id}-${message.channel.id}`;
-    const nowTs = Date.now();
+    const now = Date.now();
 
-    if (cooldown.has(key) && nowTs - cooldown.get(key) < CONFIG.cooldown) return;
-    cooldown.set(key, nowTs);
+    if (cooldown.has(key) && now - cooldown.get(key) < CONFIG.cooldown) return;
+    cooldown.set(key, now);
 
     let trigger = false;
     let content = message.content.trim();
@@ -212,15 +230,8 @@ client.on("messageCreate", async (message) => {
         content = content.replace(/^gemini[\s:,.!?-]*/i, "").trim();
     }
 
-    if (message.reference) {
-        try {
-            const replied = await message.channel.messages.fetch(message.reference.messageId);
-            if (replied.author.id === client.user.id) trigger = true;
-        } catch {}
-    }
-
     if (!trigger) return;
-    if (!content) content = "Describe esta imagen";
+    if (!content) content = "Hola";
 
     try {
 
@@ -238,66 +249,58 @@ client.on("messageCreate", async (message) => {
 
         let history = sanitizeHistory(getMemory(userId, channelId));
 
-        // ===== 🕒 FECHA SOLO SI NO ES NOTICIA =====
+        // 🕒 fecha solo si toca
         if (needsCurrentDate(content) && !isNewsRequest(content)) {
-
-            const now = new Date();
-            const currentDate = now.toLocaleDateString("es-ES", {
+            const nowDate = new Date().toLocaleDateString("es-ES", {
                 weekday: "long",
                 year: "numeric",
                 month: "long",
                 day: "numeric"
             });
 
-            content = `Hoy es ${currentDate}.\n\n${content}`;
+            content = `Hoy es ${nowDate}.\n\n${content}`;
         }
 
         // ===== 📰 NOTICIAS =====
         if (isNewsRequest(content)) {
 
             const topic = extractNewsTopic(content);
-            const news = await fetchNews(topic);
+            const articles = await fetchNews(topic);
 
-            if (news) {
-                content = `
-NOTICIAS REALES RECIENTES SOBRE "${topic}":
-
-${news}
-
-INSTRUCCIONES:
-- Resume estas noticias
-- Usa SOLO la información proporcionada
-- NO inventes nada
-- NO hagas escenarios hipotéticos
-`;
-            } else {
-                content = "No se han encontrado noticias recientes fiables sobre ese tema.";
+            if (!articles.length) {
+                return message.reply(`📰 No he encontrado noticias recientes sobre "${topic}".`);
             }
-        }
 
-        const imageParts = await getImageParts(message);
-
-        const contentParts = [];
-        if (content) contentParts.push({ text: content });
-        contentParts.push(...imageParts);
-
-        let reply = await askGemini(history, contentParts);
-        reply = cleanResponse(reply);
-
-        if (shouldStoreMessage(content) && shouldStoreMessage(reply)) {
-
-            history.push(
-                { role: "user", parts: [{ text: content }] },
-                { role: "model", parts: [{ text: reply }] }
+            const translated = await Promise.all(
+                articles.map(a => translateToSpanish(a.title))
             );
 
-            if (history.length > CONFIG.maxHistory) {
-                history = history.slice(-CONFIG.maxHistory);
-                if (history[0]?.role === "model") history.shift();
-            }
+            const formatted = articles.map((a, i) => {
+                const date = new Date(a.date).toLocaleDateString("es-ES");
 
-            saveMemory(userId, channelId, history);
+                return `**${i + 1}. ${translated[i]}**
+📰 ${a.source} | ${date}
+🔗 ${a.url}`;
+            }).join("\n\n");
+
+            return message.reply(`📰 Últimas noticias sobre **${topic}**:\n\n${formatted}`);
         }
+
+        // ===== NORMAL =====
+        let reply = await askGemini(history, [{ text: content }]);
+        reply = cleanResponse(reply);
+
+        history.push(
+            { role: "user", parts: [{ text: content }] },
+            { role: "model", parts: [{ text: reply }] }
+        );
+
+        if (history.length > CONFIG.maxHistory) {
+            history = history.slice(-CONFIG.maxHistory);
+            if (history[0]?.role === "model") history.shift();
+        }
+
+        saveMemory(userId, channelId, history);
 
         const messages = splitMessage(reply);
 
@@ -308,7 +311,7 @@ INSTRUCCIONES:
 
     } catch (err) {
         console.error(err);
-        message.reply("Ahora mismo estoy un poco saturado 😅 Inténtalo en unos segundos.");
+        message.reply("Ahora mismo estoy un poco saturado 😅");
     }
 });
 
