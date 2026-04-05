@@ -1,3 +1,6 @@
+console.log("GNEWS_API_KEY:", process.env.GNEWS_API_KEY ? "OK" : "MISSING");
+console.log("NEWS_API_KEY:", process.env.NEWS_API_KEY ? "OK" : "MISSING");
+
 require("dotenv").config();
 
 const { Client, GatewayIntentBits, PermissionsBitField } = require("discord.js");
@@ -136,38 +139,46 @@ Responde SOLO en JSON:
 
 // ===== GNEWS =====
 async function fetchGNews(topic) {
+
+    const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(topic)}&lang=en&max=5&apikey=${process.env.GNEWS_API_KEY}`;
+
+    console.log("🌍 GNews URL:", url);
+
     try {
-        const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(topic)}&lang=en&max=10&apikey=${process.env.GNEWS_API_KEY}`;
         const res = await fetch(url);
         const data = await res.json();
 
-        return data.articles?.map(a => ({
-            title: a.title,
-            url: a.url,
-            source: a.source.name,
-            date: a.publishedAt
-        })) || [];
+        console.log("📰 GNews response:", data);
 
-    } catch {
+        if (!data.articles) return [];
+
+        return data.articles;
+
+    } catch (err) {
+        console.error("❌ GNews error:", err);
         return [];
     }
 }
 
 // ===== NEWSAPI =====
 async function fetchNewsAPI(topic) {
+
+    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(topic)}&language=en&sortBy=publishedAt&pageSize=5&apiKey=${process.env.NEWS_API_KEY}`;
+
+    console.log("🌍 NewsAPI URL:", url);
+
     try {
-        const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(topic)}&language=en&sortBy=publishedAt&pageSize=10&apiKey=${process.env.NEWS_API_KEY}`;
         const res = await fetch(url);
         const data = await res.json();
 
-        return data.articles?.map(a => ({
-            title: a.title,
-            url: a.url,
-            source: a.source.name,
-            date: a.publishedAt
-        })) || [];
+        console.log("📰 NewsAPI response:", data);
 
-    } catch {
+        if (!data.articles) return [];
+
+        return data.articles;
+
+    } catch (err) {
+        console.error("❌ NewsAPI error:", err);
         return [];
     }
 }
